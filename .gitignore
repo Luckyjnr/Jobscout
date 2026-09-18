@@ -1,0 +1,9 @@
+node_modules
+dist
+.env
+web/.next
+web/node_modules
+web/.env
+.next
+profile.md
+*.tsbuildinfo

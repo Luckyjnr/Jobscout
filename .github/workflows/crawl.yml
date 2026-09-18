@@ -1,0 +1,53 @@
+name: crawl
+
+on:
+  schedule:
+    # every 6 hours, on the hour
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+# a crawl writing to the same database as another crawl helps nobody
+concurrency:
+  group: crawl
+  cancel-in-progress: false
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Check the database secret is set
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::DATABASE_URL secret is not set. See README — this needs a hosted Postgres." >&2
+            exit 1
+          fi
+
+      - run: npm ci
+
+      - name: Migrate
+        run: npm run migrate
+
+      # fails the step when more than 20% of boards error, so a broken crawl
+      # is loud rather than a green run that collected nothing
+      - name: Crawl
+        run: npm run crawl -- --max-failure-rate 0.2
+
+      - name: Score
+        run: npm run score
+
+      # runs even when the crawl failed: that is exactly when you want to read it
+      - name: Report
+        if: always()
+        run: npm run --silent report -- --markdown >> "$GITHUB_STEP_SUMMARY"
