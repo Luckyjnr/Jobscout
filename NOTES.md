@@ -43,3 +43,6 @@
 - fetched_at is rewritten on every upsert, so it can't answer "what's new".
   created_at must be excluded from the upsert's update list.
 - Failure-rate threshold scales with board count. At 5 boards one flake is 20%.
+- Supabase direct connection is IPv6-only. GitHub Actions has no IPv6.
+  Must use the pooler (port 6543, host contains pooler.supabase.com).
+- First real scheduled run: 52 boards, 5,407 jobs, 74 scoring above 50.
