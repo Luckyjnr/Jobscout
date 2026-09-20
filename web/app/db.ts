@@ -84,6 +84,7 @@ export async function queueRows(limit = QUEUE_LIMIT): Promise<Row[]> {
     `select ${GROUPED_COLUMNS}, null::text as note, null::timestamptz as decided_at
        from jobs j
       where j.score is not null
+        and not j.closed
         and not exists (select 1 from decisions d where d.job_id = j.id)
       group by j.fingerprint
       order by max(j.score) desc, max(j.posted_at) desc nulls last
@@ -142,7 +143,7 @@ export async function totals(): Promise<Totals> {
     pool().query<{ queue: string; interested: string; rejected: string; today: string }>(
       `select
          (select count(distinct j.fingerprint) from jobs j
-           where j.score is not null
+           where j.score is not null and not j.closed
              and not exists (select 1 from decisions d where d.job_id = j.id)) as queue,
          (select count(distinct j.fingerprint) from jobs j
             join decisions d on d.job_id = j.id where d.decision = 'interested') as interested,
@@ -155,7 +156,7 @@ export async function totals(): Promise<Totals> {
     pool().query<{ source: string; count: string }>(
       `select j.source, count(distinct j.fingerprint)::text as count
          from jobs j
-        where j.score is not null
+        where j.score is not null and not j.closed
           and not exists (select 1 from decisions d where d.job_id = j.id)
         group by j.source order by 2 desc`,
     ),

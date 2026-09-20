@@ -32,6 +32,15 @@ alter table jobs add column if not exists created_at timestamptz;
 update jobs set created_at = fetched_at where created_at is null;
 alter table jobs alter column created_at set default now();
 
+-- which crawl target produced this row, e.g. 'greenhouse/moniepoint'.
+-- Closing needs to know the exact board a job came from: `source` alone is
+-- not enough, since one Greenhouse board is not all of Greenhouse.
+alter table jobs add column if not exists board text;
+
+-- a posting the board has stopped listing. Stored, never queued.
+alter table jobs add column if not exists closed boolean not null default false;
+alter table jobs add column if not exists closed_at timestamptz;
+
 -- llm judgement: the fit score and the model's own reasoning
 alter table jobs add column if not exists fit integer;
 alter table jobs add column if not exists reasons jsonb;
@@ -44,6 +53,8 @@ create index if not exists jobs_posted_at_idx on jobs (posted_at desc);
 create index if not exists jobs_score_idx on jobs (score desc nulls last);
 create index if not exists jobs_fit_idx on jobs (fit desc nulls last);
 create index if not exists jobs_created_at_idx on jobs (created_at desc);
+create index if not exists jobs_board_idx on jobs (board) where not closed;
+create index if not exists jobs_open_idx on jobs (closed) where not closed;
 
 create table if not exists companies (
   id          bigserial primary key,
@@ -84,6 +95,11 @@ create table if not exists sources (
   attribution_required boolean not null default false,
   attribution_text     text,
   attribution_url      text,
+  -- whether a response is the whole board or just the newest slice. RSS feeds
+  -- hand back a rolling window (Jobicy 200, MyJobMag 100), so a job missing
+  -- from one is usually just older, not gone — closing on those would wipe the
+  -- corpus every run. ATS boards return everything and are closed on.
+  closes_missing       boolean not null default false,
   last_ok_at           timestamptz,
   last_error           text,
   created_at           timestamptz not null default now(),

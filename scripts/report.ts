@@ -79,6 +79,7 @@ const [{ rows: newJobs }, { rows: stale }, { rows: failures }, { rows: totals }]
     `select company, title, score, url, salary_text, location, source
        from jobs
       where created_at >= $1
+        and not closed
         -- stored, but too old to count as news
         and (posted_at is null or posted_at >= now() - make_interval(days => $2::int))
       order by score desc nulls last, company
@@ -104,7 +105,7 @@ const [{ rows: newJobs }, { rows: stale }, { rows: failures }, { rows: totals }]
       order by name`,
   ),
   pool.query<{ jobs: string; companies: string }>(
-    `select (select count(*) from jobs)::text as jobs,
+    `select (select count(*) from jobs where not closed)::text as jobs,
             (select count(*) from companies where active)::text as companies`,
   ),
 ]);
@@ -124,7 +125,7 @@ lines.push(
     (Number(stale[0]?.n ?? 0) > 0
       ? ` (${stale[0]?.n} suppressed as older than ${MAX_NEW_AGE_DAYS} days)`
       : ""),
-  `- corpus now: ${totals[0]?.jobs ?? "?"} jobs across ${totals[0]?.companies ?? "?"} active boards`,
+  `- corpus now: ${totals[0]?.jobs ?? "?"} open jobs across ${totals[0]?.companies ?? "?"} active boards`,
   "",
 );
 

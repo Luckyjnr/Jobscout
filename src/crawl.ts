@@ -1,4 +1,4 @@
-import { pool, upsertJobs } from "./db.js";
+import { closeMissing, pool, upsertJobs } from "./db.js";
 import { CRAWL_DELAY_MS, sleep } from "./http.js";
 import { fetchAshbyWithStats } from "./sources/ashby.js";
 import { FEED_BY_NAME } from "./sources/feeds.js";
@@ -19,6 +19,7 @@ export type Feed = {
   name: string;
   kind: string;
   url: string;
+  closes_missing: boolean;
 };
 
 export type Target =
@@ -32,6 +33,8 @@ export type Outcome = {
   skipped: number;
   inserted: number;
   updated: number;
+  /** postings this board stopped listing */
+  closed: number;
   error?: string;
 };
 
@@ -45,6 +48,7 @@ export type CrawlSummary = {
   skipped: number;
   inserted: number;
   updated: number;
+  closed: number;
   outcomes: Outcome[];
 };
 
@@ -73,7 +77,7 @@ export async function activeCompanies(ignoreIntervals = false): Promise<Company[
 
 export async function activeFeeds(ignoreIntervals = false): Promise<Feed[]> {
   const { rows } = await pool.query<Feed>(
-    `select id::text, name, kind, url
+    `select id::text, name, kind, url, closes_missing
        from sources
       where active ${ignoreIntervals ? "" : `and ${DUE}`}
       order by id`,
@@ -109,7 +113,7 @@ async function crawlOne(target: Target): Promise<Outcome> {
       ? `${target.company.ats}/${target.company.token}`
       : `feed/${target.feed.name}`;
 
-  const base = { label, fetched: 0, skipped: 0, inserted: 0, updated: 0 };
+  const base = { label, fetched: 0, skipped: 0, inserted: 0, updated: 0, closed: 0 };
 
   try {
     if (target.type === "company") {
@@ -125,18 +129,24 @@ async function crawlOne(target: Target): Promise<Outcome> {
             ? await fetchAshbyWithStats(company.token, company.name)
             : await fetchLeverWithStats(company.token, company.name);
 
-      const { inserted, updated } = await upsertJobs(fetched.jobs);
+      const { inserted, updated } = await upsertJobs(fetched.jobs, label);
+      // an ATS board returns its whole list, so anything absent is gone
+      const closed = await closeMissing(label, fetched.jobs.map((job) => job.sourceId));
       await recordOk(table, id);
-      return { ...base, ok: true, fetched: fetched.fetched, skipped: fetched.skipped, inserted, updated };
+      return { ...base, ok: true, fetched: fetched.fetched, skipped: fetched.skipped, inserted, updated, closed };
     }
 
     const mapping = FEED_BY_NAME.get(target.feed.name);
     if (!mapping) throw new Error(`no mapping for feed "${target.feed.name}"`);
 
     const fetched = await fetchFeedWithStats(mapping);
-    const { inserted, updated } = await upsertJobs(fetched.jobs);
+    const { inserted, updated } = await upsertJobs(fetched.jobs, label);
+    // most feeds are a rolling window, so absence proves nothing
+    const closed = target.feed.closes_missing
+      ? await closeMissing(label, fetched.jobs.map((job) => job.sourceId))
+      : 0;
     await recordOk(table, id);
-    return { ...base, ok: true, fetched: fetched.fetched, skipped: fetched.skipped, inserted, updated };
+    return { ...base, ok: true, fetched: fetched.fetched, skipped: fetched.skipped, inserted, updated, closed };
   } catch (err) {
     const error = describe(err);
     // a failure to record the failure must not take the crawl down either
@@ -175,6 +185,7 @@ export async function crawl(options: CrawlOptions = {}): Promise<CrawlSummary> {
     skipped: 0,
     inserted: 0,
     updated: 0,
+    closed: 0,
     outcomes: [],
   };
 
@@ -188,11 +199,13 @@ export async function crawl(options: CrawlOptions = {}): Promise<CrawlSummary> {
     summary.skipped += outcome.skipped;
     summary.inserted += outcome.inserted;
     summary.updated += outcome.updated;
+    summary.closed += outcome.closed;
 
     if (outcome.ok) {
       summary.ok += 1;
       console.log(
-        `${outcome.label}: fetched ${outcome.fetched}, skipped ${outcome.skipped}, inserted ${outcome.inserted}, updated ${outcome.updated}`,
+        `${outcome.label}: fetched ${outcome.fetched}, skipped ${outcome.skipped}, inserted ${outcome.inserted}, updated ${outcome.updated}` +
+          (outcome.closed > 0 ? `, closed ${outcome.closed}` : ""),
       );
     } else {
       summary.failed += 1;
