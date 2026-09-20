@@ -6,10 +6,12 @@
     "dev": "next dev --port 3111",
     "build": "next build",
     "start": "next start --port 3111",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "dotenv": "^17.4.2",
+    "framer-motion": "^13.4.0",
     "next": "^16.3.5",
     "pg": "^8.23.0",
     "react": "^19.3.0",
@@ -19,6 +21,7 @@
     "@types/node": "^22.20.3",
     "@types/pg": "^8.23.1",
     "@types/react": "^19.3.0",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.1"
   }
 }

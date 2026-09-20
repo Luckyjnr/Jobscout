@@ -1,56 +1,69 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import { pool } from "./db";
 
 const DECISIONS = new Set(["interested", "rejected"]);
+
+export type ActionResult = { ok: true } | { ok: false; error: string };
+
+/**
+ * These deliberately do not call revalidatePath. The queue is held and mutated
+ * on the client, optimistically; revalidating would refetch and re-render the
+ * whole list on every keypress, which is the jank this rebuild exists to avoid.
+ * A reload reads the server state, which is always the truth.
+ */
+function fail(err: unknown): ActionResult {
+  return { ok: false, error: err instanceof Error ? err.message : String(err) };
+}
 
 /**
  * A decision is made on the role, so it lands on every posting in the group —
  * otherwise the same job reappears in the queue under a different city.
  */
-export async function decide(formData: FormData): Promise<void> {
-  const fingerprint = String(formData.get("fingerprint") ?? "");
-  const decision = String(formData.get("decision") ?? "");
+export async function decide(fingerprint: string, decision: string): Promise<ActionResult> {
+  if (!fingerprint) return { ok: false, error: "no fingerprint" };
+  if (!DECISIONS.has(decision)) return { ok: false, error: `unknown decision "${decision}"` };
 
-  if (!fingerprint) throw new Error("no fingerprint");
-  if (!DECISIONS.has(decision)) throw new Error(`unknown decision "${decision}"`);
-
-  await pool().query(
-    `insert into decisions (job_id, decision)
-     select id, $2 from jobs where fingerprint = $1
-     on conflict (job_id) do update
-        set decision = excluded.decision, decided_at = now()`,
-    [fingerprint, decision],
-  );
-
-  revalidatePath("/");
+  try {
+    await pool().query(
+      `insert into decisions (job_id, decision)
+       select id, $2 from jobs where fingerprint = $1
+       on conflict (job_id) do update
+          set decision = excluded.decision, decided_at = now()`,
+      [fingerprint, decision],
+    );
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
 }
 
 /** Undo — drops the decision on every posting of the role, back to the queue. */
-export async function undecide(formData: FormData): Promise<void> {
-  const fingerprint = String(formData.get("fingerprint") ?? "");
-  if (!fingerprint) throw new Error("no fingerprint");
+export async function undecide(fingerprint: string): Promise<ActionResult> {
+  if (!fingerprint) return { ok: false, error: "no fingerprint" };
 
-  await pool().query(
-    `delete from decisions
-      where job_id in (select id from jobs where fingerprint = $1)`,
-    [fingerprint],
-  );
-
-  revalidatePath("/");
+  try {
+    await pool().query(
+      `delete from decisions where job_id in (select id from jobs where fingerprint = $1)`,
+      [fingerprint],
+    );
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
 }
 
-export async function saveNote(formData: FormData): Promise<void> {
-  const fingerprint = String(formData.get("fingerprint") ?? "");
-  const note = String(formData.get("note") ?? "").trim();
-  if (!fingerprint) throw new Error("no fingerprint");
+export async function saveNote(fingerprint: string, note: string): Promise<ActionResult> {
+  if (!fingerprint) return { ok: false, error: "no fingerprint" };
 
-  await pool().query(
-    `update decisions set note = $2
-      where job_id in (select id from jobs where fingerprint = $1)`,
-    [fingerprint, note === "" ? null : note],
-  );
-
-  revalidatePath("/");
+  try {
+    await pool().query(
+      `update decisions set note = $2
+        where job_id in (select id from jobs where fingerprint = $1)`,
+      [fingerprint, note.trim() === "" ? null : note.trim()],
+    );
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
 }
