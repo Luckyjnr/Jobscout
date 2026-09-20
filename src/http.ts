@@ -22,6 +22,19 @@ export class HttpError extends Error {
   }
 }
 
+/** Same rules as fetchJson, for feeds that serve XML. */
+export async function fetchText(url: string): Promise<string> {
+  const response = await fetch(url, {
+    headers: { "user-agent": USER_AGENT, accept: "application/rss+xml, application/xml, text/xml" },
+  });
+
+  if (!response.ok) {
+    throw new HttpError(response.status, url, response.statusText);
+  }
+
+  return response.text();
+}
+
 export async function fetchJson(url: string): Promise<unknown> {
   const response = await fetch(url, {
     headers: { "user-agent": USER_AGENT, accept: "application/json" },

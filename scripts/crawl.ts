@@ -54,16 +54,17 @@ try {
 
   const rate = summary.companies === 0 ? 0 : summary.failed / summary.companies;
   console.log(
-    `\n${summary.ok}/${summary.companies} boards ok, ${summary.inserted} new, ${summary.updated} refreshed`,
+    `\n${summary.ok}/${summary.companies} targets ok, ${summary.inserted} new, ${summary.updated} refreshed` +
+      (summary.waiting > 0 ? `, ${summary.waiting} waiting on their poll interval` : ""),
   );
 
   if (rate > maxFailureRate) {
     console.error(
-      `\nFAIL: ${summary.failed} of ${summary.companies} boards failed ` +
+      `\nFAIL: ${summary.failed} of ${summary.companies} targets failed ` +
         `(${(rate * 100).toFixed(0)}%, limit ${(maxFailureRate * 100).toFixed(0)}%)`,
     );
     for (const outcome of summary.outcomes.filter((o) => !o.ok)) {
-      console.error(`  ${outcome.company.ats}/${outcome.company.token}: ${outcome.error}`);
+      console.error(`  ${outcome.label}: ${outcome.error}`);
     }
     process.exitCode = 1;
   }

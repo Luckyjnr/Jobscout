@@ -16,11 +16,13 @@
     "score": "tsx scripts/score.ts",
     "report": "tsx scripts/report.ts",
     "seed": "tsx scripts/seed-companies.ts",
+    "seed-sources": "tsx scripts/seed-sources.ts",
     "llm-score": "tsx scripts/llm-score.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.126.0",
     "dotenv": "^17.4.2",
+    "fast-xml-parser": "^5.11.1",
     "pg": "^8.23.0",
     "zod": "^4.6.5"
   },

@@ -49,5 +49,8 @@ export function stripHtml(html: string): string {
     .replace(/[ \t\f\v]+/g, " ")
     .replace(/ ?\n ?/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
+    // an inline tag closing before punctuation leaves a gap: "<i>pay</i>." -> "pay ."
+    .replace(/ +([,.;:!?%)\]])/g, "$1")
+    .replace(/([(\[]) +/g, "$1")
     .trim();
 }

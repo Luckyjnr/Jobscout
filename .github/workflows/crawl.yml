@@ -39,6 +39,10 @@ jobs:
       - name: Migrate
         run: npm run migrate
 
+      # feed definitions live in code; this reconciles them into the table
+      - name: Seed feed sources
+        run: npm run seed-sources
+
       # fails the step when more than 20% of boards error, so a broken crawl
       # is loud rather than a green run that collected nothing
       - name: Crawl

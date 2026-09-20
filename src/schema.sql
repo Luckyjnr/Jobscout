@@ -70,6 +70,29 @@ create table if not exists decisions (
 
 create index if not exists decisions_decision_idx on decisions (decision);
 
+-- feed sources that are not per-company ATS boards: RSS and JSON job feeds.
+-- min_interval_minutes is a floor the crawler respects, because some feeds ask
+-- to be polled far less often than others (Jobicy: "a few times daily").
+create table if not exists sources (
+  id                   bigserial primary key,
+  name                 text not null,
+  kind                 text not null,          -- 'rss' | 'json'
+  url                  text not null,
+  active               boolean not null default true,
+  min_interval_minutes integer not null default 15,
+  -- what the feed's own terms require of anyone republishing it
+  attribution_required boolean not null default false,
+  attribution_text     text,
+  attribution_url      text,
+  last_ok_at           timestamptz,
+  last_error           text,
+  created_at           timestamptz not null default now(),
+  unique (name)
+);
+
+-- ATS boards get the same courtesy floor
+alter table companies add column if not exists min_interval_minutes integer not null default 15;
+
 -- one row per crawl, so a report can say what changed since the last one
 create table if not exists runs (
   id           bigserial primary key,
