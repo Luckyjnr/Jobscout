@@ -239,6 +239,39 @@ const RULES: Rule[] = [
 
 const SALARY_SIGNAL = { name: "salary published", weight: 5 } as const;
 
+/**
+ * Age of the posting, which no amount of reading the text can tell you.
+ * A job posted this week is a different proposition from the same job posted
+ * last year: the old one is usually filled, withdrawn, or a board that never
+ * expires anything. Bands rather than a curve, so a score stays explainable.
+ */
+const RECENCY_BANDS: Array<{ upToDays: number; weight: number; label: string }> = [
+  { upToDays: 7, weight: 15, label: "within a week" },
+  { upToDays: 30, weight: 5, label: "within a month" },
+  // 30-180 days is the neutral middle and scores nothing
+  { upToDays: 180, weight: 0, label: "a few months old" },
+  { upToDays: 365, weight: -20, label: "over 6 months old" },
+  { upToDays: Infinity, weight: -40, label: "over a year old" },
+];
+
+function recencySignal(postedAt: Date | null, now: number): Signal {
+  const name = "recency";
+  if (!postedAt || Number.isNaN(postedAt.getTime())) {
+    // no date is not the same as an old date, so it scores nothing
+    return { name, weight: 0, matched: false };
+  }
+
+  const days = Math.floor((now - postedAt.getTime()) / 86_400_000);
+  const band = RECENCY_BANDS.find((entry) => days <= entry.upToDays) ?? RECENCY_BANDS.at(-1)!;
+
+  return {
+    name,
+    weight: band.weight,
+    matched: band.weight !== 0,
+    evidence: `${band.label} (${days}d)`,
+  };
+}
+
 /** Every distinct pattern that hits, with where the first hit landed. */
 function allMatches(text: string, patterns: RegExp[]): Array<{ term: string; index: number }> {
   const hits: Array<{ term: string; index: number }> = [];
@@ -272,7 +305,7 @@ function evaluate(rule: Rule, text: string): string | null {
  * The title outweighs the description on purpose. A description is written to
  * attract applicants; the title is the job.
  */
-export function scoreLocal(job: Job): LocalScore {
+export function scoreLocal(job: Job, now = Date.now()): LocalScore {
   const fields = {
     description: job.description ?? "",
     title: job.title ?? "",
@@ -316,6 +349,8 @@ export function scoreLocal(job: Job): LocalScore {
     matched: !!salary,
     ...(salary ? { evidence: salary } : {}),
   });
+
+  signals.push(recencySignal(job.postedAt, now));
 
   const total = signals.reduce((sum, signal) => (signal.matched ? sum + signal.weight : sum), 0);
 

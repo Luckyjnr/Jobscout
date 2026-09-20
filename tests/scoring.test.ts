@@ -28,7 +28,7 @@ const matched = (score: LocalScore, name: string) => signal(score, name).matched
 describe("scoreLocal", () => {
   it("reports every signal, matched or not", () => {
     const score = scoreLocal(job({ description: "" }));
-    expect(score.signals).toHaveLength(12);
+    expect(score.signals).toHaveLength(13);
     expect(score.signals.every((s) => typeof s.matched === "boolean")).toBe(true);
     expect(score.signals.filter((s) => s.matched).map((s) => s.name)).toEqual([
       "backend/full-stack title",
@@ -332,5 +332,57 @@ describe("customer-facing engineer titles", () => {
     for (const title of ["Backend Engineer", "Solutions Architect", "Platform Engineer"]) {
       expect(weightOf(title)).toBe(0);
     }
+  });
+});
+
+describe("recency", () => {
+  const NOW = Date.UTC(2026, 8, 20, 12, 0, 0);
+  const daysAgo = (days: number) => new Date(NOW - days * 86_400_000);
+  const recency = (days: number | null) =>
+    scoreLocal(job({ postedAt: days === null ? null : daysAgo(days) }), NOW).signals.find(
+      (s) => s.name === "recency",
+    )!;
+
+  it("rewards a posting from this week", () => {
+    expect(recency(0).weight).toBe(15);
+    expect(recency(7).weight).toBe(15);
+  });
+
+  it("gives a smaller nudge within a month", () => {
+    expect(recency(8).weight).toBe(5);
+    expect(recency(30).weight).toBe(5);
+  });
+
+  it("scores nothing in the neutral middle", () => {
+    const middle = recency(90);
+    expect(middle.weight).toBe(0);
+    expect(middle.matched).toBe(false);
+  });
+
+  it("penalises anything over six months", () => {
+    expect(recency(181).weight).toBe(-20);
+    expect(recency(365).weight).toBe(-20);
+  });
+
+  it("penalises anything over a year harder", () => {
+    expect(recency(366).weight).toBe(-40);
+    expect(recency(3000).weight).toBe(-40);
+  });
+
+  it("treats a missing date as unknown, not old", () => {
+    const none = recency(null);
+    expect(none.matched).toBe(false);
+    expect(none.weight).toBe(0);
+  });
+
+  it("says how old the posting is", () => {
+    expect(recency(3).evidence).toContain("3d");
+    expect(recency(400).evidence).toContain("over a year old");
+  });
+
+  it("counts towards the total", () => {
+    const fresh = scoreLocal(job({ title: "Backend Engineer", postedAt: daysAgo(1) }), NOW);
+    const old = scoreLocal(job({ title: "Backend Engineer", postedAt: daysAgo(400) }), NOW);
+    expect(fresh.total - old.total).toBe(55); // +15 against -40
   });
 });

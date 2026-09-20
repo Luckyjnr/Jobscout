@@ -21,9 +21,10 @@ type Row = {
   location: string | null;
   salary_text: string | null;
   url: string;
+  posted_at: Date | null;
 };
 
-/** The scorer reads four fields; the rest are filled to satisfy the type. */
+/** The scorer reads five fields; the rest are filled to satisfy the type. */
 function toJob(row: Row): Job {
   return {
     source: row.source,
@@ -35,7 +36,8 @@ function toJob(row: Row): Job {
     location: row.location,
     remote: false,
     salaryText: row.salary_text,
-    postedAt: null,
+    // the recency signal needs this; it was null here until that rule existed
+    postedAt: row.posted_at,
     fetchedAt: new Date(),
     fingerprint: "",
     postingFingerprint: "",
@@ -60,7 +62,8 @@ async function main(): Promise<void> {
   const top = topIndex === -1 ? 25 : Number(process.argv[topIndex + 1] ?? 25);
 
   const { rows } = await pool.query<Row>(
-    `select id::text, source, company, title, description, location, salary_text, url from jobs order by id`,
+    `select id::text, source, company, title, description, location, salary_text, url, posted_at
+       from jobs order by id`,
   );
   console.log(`scoring ${rows.length} jobs`);
 
