@@ -89,7 +89,13 @@ describe("scoreLocal", () => {
     });
 
     it("does not read 'internal' as intern", () => {
-      expect(matched(scoreLocal(job({ title: "Internal Tools Engineer" })), "intern/graduate title")).toBe(false);
+      expect(matched(scoreLocal(job({ title: "Internal Tools Engineer" })), "junior/intern/graduate title")).toBe(false);
+    });
+
+    it("penalises junior and jr titles", () => {
+      for (const title of ["Junior Backend Engineer", "Jr. Software Engineer", "Jr Developer"]) {
+        expect(matched(scoreLocal(job({ title })), "junior/intern/graduate title")).toBe(true);
+      }
     });
 
     it("reads C# but not C++", () => {
@@ -103,7 +109,29 @@ describe("scoreLocal", () => {
       const score = scoreLocal(job({ title: "Enterprise Account Executive" }));
       expect(matched(score, "not engineering")).toBe(true);
       expect(matched(score, "backend/full-stack title")).toBe(false);
-      expect(score.total).toBe(-30);
+      expect(score.total).toBe(-60);
+    });
+
+    it("covers the whole non-engineering title list", () => {
+      const titles = [
+        "Junior Accountant", "Internal Auditor", "Bookkeeper", "Finance Officer",
+        "Account Officer", "Sales Manager", "Enterprise Account Executive",
+        "Business Development Lead", "Technical Recruiter", "Talent Partner",
+        "People Ops Lead", "HR Manager", "Marketing Executive", "Product Designer",
+        "Content Strategist", "Copywriter", "Customer Success Manager",
+        "Administrative Assistant", "Receptionist", "Delivery Driver",
+        "Procurement Officer", "Operations Manager", "Project Manager",
+        "Product Manager",
+      ];
+      for (const title of titles) {
+        expect(matched(scoreLocal(job({ title })), "not engineering")).toBe(true);
+      }
+    });
+
+    it("does not catch engineering titles that contain those words", () => {
+      for (const title of ["Device Driver Engineer", "Kernel Driver Developer", "Support Engineer"]) {
+        expect(matched(scoreLocal(job({ title })), "not engineering")).toBe(false);
+      }
     });
 
     it("penalises residency and clearance requirements", () => {
@@ -197,5 +225,112 @@ describe("tuning", () => {
   it("salary is worth 5", () => {
     const signal = scoreLocal(job({ salaryText: "$1" })).signals.find((s) => s.name === "salary published")!;
     expect(signal.weight).toBe(5);
+  });
+});
+
+describe("domain signals require an engineering signal", () => {
+  const paymentsText =
+    "We are a payments company. You will reconcile ledgers and handle billing for our fintech clients.";
+
+  it("does not credit a Junior Accountant for working with payments", () => {
+    const score = scoreLocal(job({ title: "Junior Accountant", description: paymentsText }));
+    const payments = signal(score, "payments domain");
+
+    expect(payments.matched).toBe(false);
+    // the term is still recorded, with the reason it did not count
+    expect(payments.evidence).toContain("no engineering signal");
+    // -60 for the accountant title, -10 for "Junior"
+    expect(score.total).toBe(-70);
+  });
+
+  it("credits the same domain text in a backend role", () => {
+    const score = scoreLocal(job({ title: "Backend Engineer", description: paymentsText }));
+    expect(matched(score, "payments domain")).toBe(true);
+  });
+
+  it("opens the gate on a stack signal alone, with no backend title", () => {
+    const byTitle = scoreLocal(job({ title: "Python Engineer", description: paymentsText }));
+    expect(matched(byTitle, "payments domain")).toBe(true);
+
+    const byDescription = scoreLocal(
+      job({ title: "Software Engineer", description: `${paymentsText} We use Node and TypeScript.` }),
+    );
+    expect(matched(byDescription, "payments domain")).toBe(true);
+  });
+
+  it("gates devtools the same way", () => {
+    const text = "We build developer tools and ship an SDK.";
+    expect(matched(scoreLocal(job({ title: "Technical Writer", description: text })), "devtools domain")).toBe(false);
+    expect(matched(scoreLocal(job({ title: "Backend Engineer", description: text })), "devtools domain")).toBe(true);
+  });
+
+  it("leaves the ungated signals alone", () => {
+    // postgres is not gated: a database is a database whoever is hiring
+    const score = scoreLocal(job({ title: "Data Analyst", description: "We run Postgres." }));
+    expect(matched(score, "postgres")).toBe(true);
+  });
+});
+
+describe("softening the non-engineering penalty", () => {
+  const weightOf = (title: string) => signal(scoreLocal(job({ title })), "not engineering").weight;
+
+  it("softens to -15 when the title also reads as engineering", () => {
+    expect(weightOf("Software Engineer, Bill Pay & Procurement")).toBe(-15);
+    expect(weightOf("Marketing Engineer")).toBe(-15);
+    expect(weightOf("Systems Support / Network Engineer")).toBe(-15);
+    expect(weightOf("Content Platform Developer")).toBe(-15);
+  });
+
+  it("keeps the full -60 for sales and solutions engineers", () => {
+    expect(weightOf("Sales Engineer II")).toBe(-60);
+    expect(weightOf("Enterprise Sales Engineer - UK")).toBe(-60);
+    expect(weightOf("Technical Sales Engineer (Gas Generators)")).toBe(-60);
+    expect(weightOf("Solutions Engineer, EMEA")).toBe(-60);
+  });
+
+  it("keeps the full -60 when 'engineering' is a department, not the role", () => {
+    // \bengineers?\b does not match "Engineering"
+    expect(weightOf("Technical Recruiter | Engineering")).toBe(-60);
+    expect(weightOf("Head of Marketing, Engineering Tools")).toBe(-60);
+  });
+
+  it("leaves titles with no engineering word at the full penalty", () => {
+    expect(weightOf("Junior Accountant")).toBe(-60);
+    expect(weightOf("Account Executive")).toBe(-60);
+  });
+
+  it("says in the evidence why the penalty was reduced", () => {
+    const score = scoreLocal(job({ title: "Marketing Engineer" }));
+    expect(signal(score, "not engineering").evidence).toContain("reads as engineering");
+  });
+
+  it("still applies the softened penalty to the total", () => {
+    // -15 only; no other signal fires on this title alone
+    expect(scoreLocal(job({ title: "Marketing Engineer" })).total).toBe(-15);
+  });
+});
+
+describe("customer-facing engineer titles", () => {
+  const weightOf = (title: string) => {
+    const found = scoreLocal(job({ title })).signals.find((s) => s.name === "not engineering")!;
+    return found.matched ? found.weight : 0;
+  };
+
+  it("penalises solutions engineers on their own", () => {
+    // nothing else in the list matches these titles
+    expect(weightOf("Solutions Engineer")).toBe(-60);
+    expect(weightOf("AI Solutions Engineer")).toBe(-60);
+    expect(weightOf("Partner Technology Solutions Engineer")).toBe(-60);
+  });
+
+  it("keeps sales engineers at the full penalty", () => {
+    expect(weightOf("Sales Engineer")).toBe(-60);
+    expect(weightOf("Senior Sales Engineer - Brazil")).toBe(-60);
+  });
+
+  it("leaves ordinary engineering titles untouched", () => {
+    for (const title of ["Backend Engineer", "Solutions Architect", "Platform Engineer"]) {
+      expect(weightOf(title)).toBe(0);
+    }
   });
 });
