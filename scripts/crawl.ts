@@ -33,7 +33,7 @@ const runId = rows[0]!.id;
 
 let failed = true;
 try {
-  const summary = await crawl();
+  const summary = await crawl({ runId });
 
   await pool.query(
     `update runs

@@ -55,7 +55,41 @@ export type CrawlSummary = {
 export type CrawlOptions = {
   /** run every target regardless of its min_interval_minutes */
   ignoreIntervals?: boolean;
+  /** the runs row this crawl belongs to, so progress can be attributed */
+  runId?: string | null;
 };
+
+/**
+ * Progress is written as the crawl goes, not summarised at the end, so a page
+ * polling scan_progress sees a run in flight rather than only its result.
+ * A failure to record progress must never take the crawl down with it.
+ */
+async function note(
+  runId: string | null | undefined,
+  stage: string,
+  status: string,
+  fields: { label?: string; detail?: string; fetched?: number; inserted?: number; closed?: number } = {},
+): Promise<void> {
+  if (!runId) return;
+  try {
+    await pool.query(
+      `insert into scan_progress (run_id, stage, label, status, detail, fetched, inserted, closed)
+       values ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [
+        runId,
+        stage,
+        fields.label ?? null,
+        status,
+        fields.detail ?? null,
+        fields.fetched ?? null,
+        fields.inserted ?? null,
+        fields.closed ?? null,
+      ],
+    );
+  } catch (err) {
+    console.error(`could not record progress: ${describe(err)}`);
+  }
+}
 
 /**
  * Both queries apply the same rule: a target is due when it has never
@@ -105,7 +139,7 @@ function describe(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-async function crawlOne(target: Target): Promise<Outcome> {
+async function crawlOne(target: Target, runId?: string | null): Promise<Outcome> {
   const table = target.type === "company" ? "companies" : "sources";
   const id = target.type === "company" ? target.company.id : target.feed.id;
   const label =
@@ -114,6 +148,7 @@ async function crawlOne(target: Target): Promise<Outcome> {
       : `feed/${target.feed.name}`;
 
   const base = { label, fetched: 0, skipped: 0, inserted: 0, updated: 0, closed: 0 };
+  await note(runId, "target", "running", { label });
 
   try {
     if (target.type === "company") {
@@ -133,6 +168,7 @@ async function crawlOne(target: Target): Promise<Outcome> {
       // an ATS board returns its whole list, so anything absent is gone
       const closed = await closeMissing(label, fetched.jobs.map((job) => job.sourceId));
       await recordOk(table, id);
+      await note(runId, "target", "ok", { label, fetched: fetched.fetched, inserted, closed });
       return { ...base, ok: true, fetched: fetched.fetched, skipped: fetched.skipped, inserted, updated, closed };
     }
 
@@ -146,6 +182,7 @@ async function crawlOne(target: Target): Promise<Outcome> {
       ? await closeMissing(label, fetched.jobs.map((job) => job.sourceId))
       : 0;
     await recordOk(table, id);
+    await note(runId, "target", "ok", { label, fetched: fetched.fetched, inserted, closed });
     return { ...base, ok: true, fetched: fetched.fetched, skipped: fetched.skipped, inserted, updated, closed };
   } catch (err) {
     const error = describe(err);
@@ -155,6 +192,7 @@ async function crawlOne(target: Target): Promise<Outcome> {
     } catch (nested) {
       console.error(`${label}: could not store last_error — ${describe(nested)}`);
     }
+    await note(runId, "target", "failed", { label, detail: error });
     return { ...base, ok: false, error };
   }
 }
@@ -170,6 +208,10 @@ export async function crawl(options: CrawlOptions = {}): Promise<CrawlSummary> {
     activeFeeds(ignore),
     ignore ? Promise.resolve(0) : countWaiting(),
   ]);
+
+  await note(options.runId, "start", "running", {
+    detail: `${companies.length + feeds.length} targets due, ${waiting} waiting`,
+  });
 
   const targets: Target[] = [
     ...companies.map((company): Target => ({ type: "company", company })),
@@ -193,7 +235,7 @@ export async function crawl(options: CrawlOptions = {}): Promise<CrawlSummary> {
     // the boards declare Crawl-delay: 1, so space the requests out
     if (index > 0) await sleep(CRAWL_DELAY_MS);
 
-    const outcome = await crawlOne(target);
+    const outcome = await crawlOne(target, options.runId);
     summary.outcomes.push(outcome);
     summary.fetched += outcome.fetched;
     summary.skipped += outcome.skipped;
@@ -216,6 +258,13 @@ export async function crawl(options: CrawlOptions = {}): Promise<CrawlSummary> {
   if (waiting > 0) {
     console.log(`\n${waiting} target(s) not due yet (per-source poll interval)`);
   }
+
+  await note(options.runId, "done", summary.failed > 0 ? "failed" : "ok", {
+    detail: `${summary.ok} ok, ${summary.failed} failed`,
+    fetched: summary.fetched,
+    inserted: summary.inserted,
+    closed: summary.closed,
+  });
 
   return summary;
 }

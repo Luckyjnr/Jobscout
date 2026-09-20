@@ -122,3 +122,21 @@ create table if not exists runs (
   inserted     integer,
   updated      integer
 );
+
+-- one row per stage of a crawl, so the scout page has something live to show.
+-- The crawl writes as it goes rather than at the end; a page polling this sees
+-- a run in progress, not just its result.
+create table if not exists scan_progress (
+  id          bigserial primary key,
+  run_id      bigint references runs(id) on delete cascade,
+  stage       text not null,          -- 'start' | 'target' | 'score' | 'done'
+  label       text,                   -- which board, when stage = 'target'
+  status      text not null,          -- 'running' | 'ok' | 'failed'
+  detail      text,
+  fetched     integer,
+  inserted    integer,
+  closed      integer,
+  at          timestamptz not null default now()
+);
+
+create index if not exists scan_progress_run_idx on scan_progress (run_id, id);
