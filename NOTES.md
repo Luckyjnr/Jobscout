@@ -46,3 +46,9 @@
 - Supabase direct connection is IPv6-only. GitHub Actions has no IPv6.
   Must use the pooler (port 6543, host contains pooler.supabase.com).
 - First real scheduled run: 52 boards, 5,407 jobs, 74 scoring above 50.
+- Feeds != boards for closing. Jobicy/MyJobMag/RemoteOK return only the
+  latest N of a larger set, so absence does not mean delisted.
+  ATS boards close on absence, feeds do not.
+- scripts/score.ts was building Job with postedAt: null. Harmless until a
+  rule read it, then silently dead. Same shortcut still in llm-score.ts.
+- Recency bands moved median score 0 -> 15.
