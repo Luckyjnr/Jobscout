@@ -48,7 +48,6 @@ export function Review({
 
   const [filters, setFilters] = useState<Filters>(EMPTY);
   const [view, setView] = useState<View>("queue");
-  const [collapsed, setCollapsed] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [showKeys, setShowKeys] = useState(false);
   const [focus, setFocus] = useState(0);
@@ -242,9 +241,8 @@ export function Review({
           break;
         case "/":
           event.preventDefault();
+          // on mobile the filter panel has to exist before it can be focused
           setSheetOpen(true);
-          setCollapsed(false);
-          // the field may have just been mounted by opening the sheet
           requestAnimationFrame(() => searchRef.current?.focus());
           break;
         case "?":
@@ -271,162 +269,185 @@ export function Review({
     [attributions],
   );
 
-  const sidebar = (
+  const filtersPanel = (
     <Sidebar filters={filters} facets={facets} update={update} reset={reset} searchRef={searchRef} />
   );
 
   return (
-    <div className="shell" data-collapsed={collapsed && !mobile}>
-      {mobile ? (
-        <AnimatePresence>
-          {sheetOpen ? (
-            <>
-              <motion.div
-                className="scrim"
-                onClick={() => setSheetOpen(false)}
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: FAST }}
-              />
-              <motion.aside
-                className="sidebar"
-                initial={reduce ? false : { y: "100%" }}
-                animate={{ y: 0 }}
-                exit={reduce ? undefined : { y: "100%" }}
-                transition={{ duration: NORMAL, ease: "easeOut" }}
-                drag="y"
-                dragConstraints={{ top: 0, bottom: 0 }}
-                dragElastic={{ top: 0, bottom: 0.4 }}
-                onDragEnd={(_, info) => {
-                  if (info.offset.y > 120) setSheetOpen(false);
-                }}
-              >
-                {sidebar}
-              </motion.aside>
-            </>
-          ) : null}
-        </AnimatePresence>
-      ) : (
-        <AnimatePresence initial={false}>
-          {collapsed ? null : (
-            <motion.aside
-              className="sidebar"
-              initial={reduce ? false : { opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={reduce ? undefined : { opacity: 0 }}
-              transition={{ duration: FAST }}
-            >
-              {sidebar}
-            </motion.aside>
-          )}
-        </AnimatePresence>
-      )}
+    <div className="page">
+      <div className="grid cols-4" style={{ marginBottom: 16 }}>
+        <div className="stat">
+          <span className="value mono">
+            <Ticker value={rows.length} />
+          </span>
+          <span className="label">{view === "queue" ? "in queue" : "interested"}</span>
+        </div>
+        <div className="stat brand">
+          <span className="value mono">
+            <Ticker value={aboveFifty} />
+          </span>
+          <span className="label">above 50</span>
+        </div>
+        <div className="stat good">
+          <span className="value mono">
+            <Ticker value={decidedToday} />
+          </span>
+          <span className="label">decided today</span>
+        </div>
+        <div className="stat">
+          <span className="value mono">{facets.sources.length}</span>
+          <span className="label">sources</span>
+          <span className="foot">{facets.sources.map((s) => s.value).join(" · ")}</span>
+        </div>
+      </div>
 
-      <div className="main">
-        <div className="topstrip">
-          {!mobile ? (
+      <div className="with-filters">
+        {mobile ? (
+          <AnimatePresence>
+            {sheetOpen ? (
+              <>
+                <motion.div
+                  className="scrim"
+                  onClick={() => setSheetOpen(false)}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: FAST }}
+                  style={{ position: "fixed", inset: 0, zIndex: 45, background: "rgb(15 18 34 / 30%)" }}
+                />
+                <motion.aside
+                  className="filters"
+                  initial={reduce ? false : { y: "100%" }}
+                  animate={{ y: 0 }}
+                  exit={reduce ? undefined : { y: "100%" }}
+                  transition={{ duration: NORMAL, ease: "easeOut" }}
+                  style={{
+                    position: "fixed",
+                    inset: "auto 0 0 0",
+                    zIndex: 50,
+                    maxHeight: "76vh",
+                    borderRadius: "20px 20px 0 0",
+                  }}
+                >
+                  {filtersPanel}
+                </motion.aside>
+              </>
+            ) : null}
+          </AnimatePresence>
+        ) : (
+          <aside className="filters">{filtersPanel}</aside>
+        )}
+
+        <div>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              marginBottom: 12,
+            }}
+          >
+            <div className="viewtabs" style={{ display: "flex", gap: 2, padding: 3, background: "var(--sunken)", borderRadius: "var(--radius-sm)" }}>
+              <button
+                className="btn quiet"
+                style={{
+                  padding: "4px 12px",
+                  background: view === "queue" ? "var(--brand)" : "none",
+                  color: view === "queue" ? "#fff" : "var(--slate)",
+                  borderRadius: 7,
+                }}
+                onClick={() => setView("queue")}
+                type="button"
+              >
+                Queue
+              </button>
+              <button
+                className="btn quiet"
+                style={{
+                  padding: "4px 12px",
+                  background: view === "interested" ? "var(--brand)" : "none",
+                  color: view === "interested" ? "#fff" : "var(--slate)",
+                  borderRadius: 7,
+                }}
+                onClick={() => setView("interested")}
+                type="button"
+              >
+                Interested
+              </button>
+            </div>
+
             <button
               className="iconbtn"
-              onClick={() => setCollapsed((value) => !value)}
-              title={collapsed ? "Show filters" : "Hide filters"}
+              style={{ marginLeft: "auto" }}
+              onClick={() => setShowKeys(true)}
+              title="Shortcuts (?)"
               type="button"
             >
-              {collapsed ? "»" : "«"}
-            </button>
-          ) : null}
-
-          <div className="stat">
-            <span className="value mono">
-              <Ticker value={rows.length} />
-            </span>
-            <span className="label">{view === "queue" ? "in queue" : "interested"}</span>
-          </div>
-
-          <div className="stat good">
-            <span className="value mono">
-              <Ticker value={aboveFifty} />
-            </span>
-            <span className="label">above 50</span>
-          </div>
-
-          <div className="stat">
-            <span className="value mono">
-              <Ticker value={decidedToday} />
-            </span>
-            <span className="label">decided today</span>
-          </div>
-
-          <div className="sources mono">
-            {facets.sources.map((entry) => (
-              <span key={entry.value}>
-                {entry.value} <b>{entry.count}</b>
-              </span>
-            ))}
-          </div>
-
-          <div className="viewtabs">
-            <button data-on={view === "queue"} onClick={() => setView("queue")} type="button">
-              Queue
-            </button>
-            <button data-on={view === "interested"} onClick={() => setView("interested")} type="button">
-              Interested
+              ?
             </button>
           </div>
 
-          <button className="iconbtn" onClick={() => setShowKeys(true)} title="Shortcuts (?)" type="button">
-            ?
-          </button>
-        </div>
+          <div className="queue">
+            <AnimatePresence initial={false} mode="popLayout">
+              {rows.map((row, index) => (
+                <motion.div
+                  key={row.fingerprint}
+                  exit={exitFor(decisions.get(row.fingerprint), reduce)}
+                  style={{ minWidth: 0 }}
+                >
+                  <JobRow
+                    row={row}
+                    credit={row.sources.map((s) => credits.get(s)).find(Boolean) ?? null}
+                    index={index}
+                    focused={index === focus}
+                    view={view}
+                    swipeable={mobile}
+                    onFocus={setFocus}
+                    onDecide={onDecide}
+                    onUndo={onUndoRow}
+                    onSaveNote={onSaveNote}
+                  />
+                </motion.div>
+              ))}
+            </AnimatePresence>
 
-        <div className="queue">
-          <AnimatePresence initial={false} mode="popLayout">
-            {rows.map((row, index) => (
-              <motion.div
-                key={row.fingerprint}
-                exit={exitFor(decisions.get(row.fingerprint), reduce)}
-                style={{ minWidth: 0 }}
-              >
-                <JobRow
-                  row={row}
-                  credit={row.sources.map((s) => credits.get(s)).find(Boolean) ?? null}
-                  index={index}
-                  focused={index === focus}
-                  view={view}
-                  swipeable={mobile}
-                  onFocus={setFocus}
-                  onDecide={onDecide}
-                  onUndo={onUndoRow}
-                  onSaveNote={onSaveNote}
-                />
-              </motion.div>
-            ))}
-          </AnimatePresence>
-
-          {rows.length === 0 ? (
-            <div className="empty">
-              <b>{view === "queue" ? "Queue clear" : "Nothing marked interested"}</b>
-              {countActive(filters) > 0 ? (
-                <>
-                  No role matches these filters.{" "}
-                  <button className="act" onClick={reset} type="button" style={{ marginLeft: 6 }}>
+            {rows.length === 0 ? (
+              <div className="empty">
+                <span className="glyph">{view === "queue" ? "✓" : "☆"}</span>
+                <b>{view === "queue" ? "Queue clear" : "Nothing marked interested"}</b>
+                <p>
+                  {countActive(filters) > 0
+                    ? "No role matches these filters."
+                    : view === "queue"
+                      ? "Everything here is decided, or the crawler has not run yet."
+                      : "Press i on a job to keep it."}
+                </p>
+                {countActive(filters) > 0 ? (
+                  <button className="btn ghost" onClick={reset} type="button">
                     Clear filters
                   </button>
-                </>
-              ) : view === "queue" ? (
-                "Run the crawler, or everything here is decided."
-              ) : (
-                "Press i on a row in the queue."
-              )}
-            </div>
-          ) : null}
+                ) : null}
+              </div>
+            ) : null}
+          </div>
         </div>
       </div>
 
       {mobile && !sheetOpen ? (
-        <button className="fab" onClick={() => setSheetOpen(true)} type="button">
-          Filters
-          {countActive(filters) > 0 ? <span className="mono">{countActive(filters)}</span> : null}
+        <button
+          className="btn primary"
+          onClick={() => setSheetOpen(true)}
+          type="button"
+          style={{
+            position: "fixed",
+            right: 16,
+            bottom: 74,
+            zIndex: 40,
+            borderRadius: 100,
+            boxShadow: "0 8px 24px rgb(43 52 219 / 35%)",
+          }}
+        >
+          Filters {countActive(filters) > 0 ? countActive(filters) : ""}
         </button>
       ) : null}
 

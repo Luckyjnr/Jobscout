@@ -1,6 +1,7 @@
 "use client";
 
 import { motion, useReducedMotion, type PanInfo } from "framer-motion";
+import Link from "next/link";
 import { memo, useEffect, useRef, useState } from "react";
 import type { Attribution, Row as RowData } from "./db";
 import { CountUp, FAST, NORMAL } from "./ui";
@@ -126,16 +127,18 @@ export const JobRow = memo(function JobRow({
       ) : null}
 
       <div className="card-top">
-        <div className="avatar" style={avatarStyle(row.company)} aria-hidden="true">
+        <div className="logo" style={avatarStyle(row.company)} aria-hidden="true">
           {initial(row.company)}
         </div>
 
         <div className="card-head">
-          <div className="title">
-            <a href={row.url} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>
-              {row.title}
-            </a>
-          </div>
+          <Link
+            className="title"
+            href={`/jobs/${row.fingerprint}`}
+            onClick={(event) => event.stopPropagation()}
+          >
+            {row.title}
+          </Link>
           <div className="company">{row.company}</div>
         </div>
 
@@ -188,15 +191,15 @@ export const JobRow = memo(function JobRow({
         <div className="acts">
           {view === "queue" ? (
             <>
-              <button className="act no" type="button" onClick={() => onDecide(row, "rejected")}>
+              <button className="btn quiet" type="button" onClick={() => onDecide(row, "rejected")}>
                 Not for me
               </button>
-              <button className="act yes" type="button" onClick={() => onDecide(row, "interested")}>
+              <button className="btn primary" type="button" onClick={() => onDecide(row, "interested")}>
                 Interested
               </button>
             </>
           ) : (
-            <button className="act ghost" type="button" onClick={() => onUndo(row)}>
+            <button className="btn ghost" type="button" onClick={() => onUndo(row)}>
               Undo
             </button>
           )}
@@ -220,7 +223,7 @@ export const JobRow = memo(function JobRow({
             }}
           />
           <button
-            className="act ghost"
+            className="btn ghost"
             type="button"
             onClick={() => onSaveNote(row, note)}
             disabled={note === (row.note ?? "")}

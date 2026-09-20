@@ -1,5 +1,8 @@
 import "dotenv/config";
 import pg from "pg";
+import type { Status } from "./pipeline";
+
+export { STATUSES, STATUS_LABELS, type Status } from "./pipeline";
 
 const { Pool } = pg;
 
@@ -74,8 +77,11 @@ const GROUPED_COLUMNS = `
   count(*)::int as postings
 `;
 
-/** Matched signals are the only ones shown or filtered on; drop the rest here. */
-function trim(row: Row): Row {
+/**
+ * Matched signals are the only ones shown or filtered on; drop the rest here.
+ * Generic so callers that select extra columns keep them.
+ */
+function trim<T extends Row>(row: T): T {
   return { ...row, signals: (row.signals ?? []).filter((signal) => signal.matched) };
 }
 
@@ -169,5 +175,453 @@ export async function totals(): Promise<Totals> {
     rejected: Number(row?.rejected ?? 0),
     decidedToday: Number(row?.today ?? 0),
     bySource: bySource.rows.map((r) => ({ source: r.source, count: Number(r.count) })),
+  };
+}
+
+// ------------------------------------------------------------------ pipeline
+
+export type Application = Row & {
+  status: Status;
+  applied_at: string | null;
+};
+
+/** Every job marked interested, with where it sits in the pipeline. */
+export async function applications(): Promise<Application[]> {
+  const { rows } = await pool().query<Application>(
+    `select ${GROUPED_COLUMNS},
+            (array_agg(d.note) filter (where d.note is not null and d.note <> ''))[1] as note,
+            max(d.decided_at) as decided_at,
+            (array_agg(d.status order by d.decided_at desc))[1] as status,
+            max(d.applied_at) as applied_at
+       from jobs j
+       join decisions d on d.job_id = j.id and d.decision = 'interested'
+      group by j.fingerprint
+      order by max(d.decided_at) desc`,
+  );
+  return rows.map(trim);
+}
+
+// -------------------------------------------------------------- job detail
+
+export type JobDetail = Row & {
+  description: string;
+  fit: number | null;
+  reasons: string[] | null;
+  concerns: string[] | null;
+  all_signals: Signal[];
+  decision: string | null;
+  status: Status | null;
+  postings_detail: Array<{ location: string | null; url: string; source: string; posted_at: string | null }>;
+};
+
+/** One role, with everything we know about it — the full description included. */
+export async function jobDetail(fingerprint: string): Promise<JobDetail | null> {
+  const { rows } = await pool().query<JobDetail>(
+    `select ${GROUPED_COLUMNS},
+            (array_agg(d.note) filter (where d.note is not null and d.note <> ''))[1] as note,
+            max(d.decided_at) as decided_at,
+            (array_agg(j.description order by length(j.description) desc))[1] as description,
+            (array_agg(j.score_signals order by j.score desc nulls last, j.id))[1] as all_signals,
+            (array_agg(j.reasons) filter (where j.reasons is not null))[1] as reasons,
+            (array_agg(j.concerns) filter (where j.concerns is not null))[1] as concerns,
+            (array_agg(d.decision) filter (where d.decision is not null))[1] as decision,
+            (array_agg(d.status) filter (where d.status is not null))[1] as status,
+            json_agg(json_build_object(
+              'location', j.location, 'url', j.url,
+              'source', j.source, 'posted_at', j.posted_at
+            ) order by j.posted_at desc nulls last) as postings_detail
+       from jobs j
+       left join decisions d on d.job_id = j.id
+      where j.fingerprint = $1 and not j.closed
+      group by j.fingerprint`,
+    [fingerprint],
+  );
+
+  const row = rows[0];
+  if (!row) return null;
+  return { ...trim(row), all_signals: (row.all_signals ?? []).filter((s) => s.matched) };
+}
+
+// --------------------------------------------------------------- dashboard
+
+export type Dashboard = {
+  queue: number;
+  aboveFifty: number;
+  decidedToday: number;
+  interested: number;
+  rejected: number;
+  openJobs: number;
+  closedJobs: number;
+  companies: number;
+  feeds: number;
+  newThisWeek: number;
+  withSalary: number;
+  byStatus: Array<{ status: Status; count: number }>;
+  bySource: Array<{ source: string; count: number }>;
+  lastRun: { id: string; started_at: string; finished_at: string | null; ok: number | null; failed: number | null } | null;
+  top: Row[];
+};
+
+export async function dashboard(): Promise<Dashboard> {
+  const [counts, byStatus, bySource, lastRun, top] = await Promise.all([
+    pool().query<Record<string, string>>(
+      `select
+         (select count(distinct fingerprint) from jobs
+           where score is not null and not closed
+             and not exists (select 1 from decisions d where d.job_id = jobs.id)) as queue,
+         (select count(distinct fingerprint) from jobs
+           where score > 50 and not closed
+             and not exists (select 1 from decisions d where d.job_id = jobs.id)) as above_fifty,
+         (select count(distinct j.fingerprint) from jobs j join decisions d on d.job_id = j.id
+           where d.decided_at >= date_trunc('day', now())) as decided_today,
+         (select count(distinct j.fingerprint) from jobs j join decisions d on d.job_id = j.id
+           where d.decision = 'interested') as interested,
+         (select count(distinct j.fingerprint) from jobs j join decisions d on d.job_id = j.id
+           where d.decision = 'rejected') as rejected,
+         (select count(*) from jobs where not closed) as open_jobs,
+         (select count(*) from jobs where closed) as closed_jobs,
+         (select count(*) from companies where active) as companies,
+         (select count(*) from sources where active) as feeds,
+         (select count(*) from jobs where not closed and created_at >= now() - interval '7 days') as new_this_week,
+         (select count(*) from jobs where not closed and salary_text is not null) as with_salary`,
+    ),
+    pool().query<{ status: Status; count: string }>(
+      `select d.status, count(distinct j.fingerprint)::text as count
+         from decisions d join jobs j on j.id = d.job_id
+        where d.decision = 'interested' group by d.status`,
+    ),
+    pool().query<{ source: string; count: string }>(
+      `select source, count(distinct fingerprint)::text as count from jobs
+        where not closed and score is not null group by source order by 2 desc`,
+    ),
+    pool().query(
+      `select id::text, started_at, finished_at, ok, failed from runs order by id desc limit 1`,
+    ),
+    pool().query<Row>(
+      `select ${GROUPED_COLUMNS}, null::text as note, null::timestamptz as decided_at
+         from jobs j
+        where j.score is not null and not j.closed
+          and not exists (select 1 from decisions d where d.job_id = j.id)
+        group by j.fingerprint
+        order by max(j.score) desc limit 5`,
+    ),
+  ]);
+
+  const c = counts.rows[0] ?? {};
+  const n = (key: string) => Number(c[key] ?? 0);
+
+  return {
+    queue: n("queue"),
+    aboveFifty: n("above_fifty"),
+    decidedToday: n("decided_today"),
+    interested: n("interested"),
+    rejected: n("rejected"),
+    openJobs: n("open_jobs"),
+    closedJobs: n("closed_jobs"),
+    companies: n("companies"),
+    feeds: n("feeds"),
+    newThisWeek: n("new_this_week"),
+    withSalary: n("with_salary"),
+    byStatus: byStatus.rows.map((r) => ({ status: r.status, count: Number(r.count) })),
+    bySource: bySource.rows.map((r) => ({ source: r.source, count: Number(r.count) })),
+    lastRun: (lastRun.rows[0] as Dashboard["lastRun"]) ?? null,
+    top: top.rows.map(trim),
+  };
+}
+
+// ---------------------------------------------------------------- analytics
+
+export type Analytics = {
+  decisionsByDay: Array<{ day: string; interested: number; rejected: number }>;
+  runs: Array<{
+    id: string;
+    started_at: string;
+    finished_at: string | null;
+    ok: number | null;
+    failed: number | null;
+    inserted: number | null;
+    updated: number | null;
+  }>;
+  scoreBuckets: Array<{ bucket: string; count: number; floor: number }>;
+  topCompanies: Array<{ company: string; jobs: number; best: number }>;
+  bySource: Array<{ source: string; jobs: number; median: number; withSalary: number }>;
+  signalRates: Array<{ name: string; weight: number; matched: number; pct: number }>;
+  funnel: { seen: number; queued: number; decided: number; interested: number; applied: number };
+};
+
+export async function analytics(): Promise<Analytics> {
+  const [byDay, runs, buckets, companies, sources, signals, funnel] = await Promise.all([
+    pool().query<{ day: string; interested: string; rejected: string }>(
+      `select to_char(date_trunc('day', d.decided_at), 'YYYY-MM-DD') as day,
+              count(*) filter (where d.decision = 'interested')::text as interested,
+              count(*) filter (where d.decision = 'rejected')::text as rejected
+         from decisions d
+        where d.decided_at >= now() - interval '30 days'
+        group by 1 order by 1`,
+    ),
+    pool().query(
+      `select id::text, started_at, finished_at, ok, failed, inserted, updated
+         from runs order by id desc limit 14`,
+    ),
+    pool().query<{ bucket: string; count: string; floor: string }>(
+      `select case
+                when score >= 80 then '80+'
+                when score >= 60 then '60-79'
+                when score >= 40 then '40-59'
+                when score >= 20 then '20-39'
+                when score >= 0  then '0-19'
+                else 'below 0' end as bucket,
+              count(*)::text as count,
+              (case when score >= 80 then 80 when score >= 60 then 60 when score >= 40 then 40
+                    when score >= 20 then 20 when score >= 0 then 0 else -100 end)::text as floor
+         from jobs where score is not null and not closed
+        group by 1, 3 order by 3 desc`,
+    ),
+    pool().query<{ company: string; jobs: string; best: string }>(
+      `select company, count(distinct fingerprint)::text as jobs, max(score)::text as best
+         from jobs where not closed and score is not null
+        group by company order by max(score) desc, 2 desc limit 12`,
+    ),
+    pool().query<{ source: string; jobs: string; median: string; withsalary: string }>(
+      `select source, count(*)::text as jobs,
+              percentile_cont(0.5) within group (order by score)::int::text as median,
+              count(*) filter (where salary_text is not null)::text as withsalary
+         from jobs where not closed and score is not null
+        group by source order by 2 desc`,
+    ),
+    pool().query<{ name: string; weight: string; matched: string; pct: string }>(
+      `select s->>'name' as name,
+              (s->>'weight')::int::text as weight,
+              count(*) filter (where (s->>'matched')::boolean)::text as matched,
+              round(100.0 * count(*) filter (where (s->>'matched')::boolean) / nullif(count(*), 0), 1)::text as pct
+         from jobs, lateral jsonb_array_elements(score_signals) s
+        where not closed
+        group by 1, 2 order by 4 desc nulls last`,
+    ),
+    pool().query<Record<string, string>>(
+      `select
+         (select count(*) from jobs)::text as seen,
+         (select count(distinct fingerprint) from jobs where score is not null and not closed)::text as queued,
+         (select count(distinct j.fingerprint) from jobs j join decisions d on d.job_id = j.id)::text as decided,
+         (select count(distinct j.fingerprint) from jobs j join decisions d on d.job_id = j.id
+           where d.decision = 'interested')::text as interested,
+         (select count(distinct j.fingerprint) from jobs j join decisions d on d.job_id = j.id
+           where d.decision = 'interested' and d.applied_at is not null)::text as applied`,
+    ),
+  ]);
+
+  const f = funnel.rows[0] ?? {};
+  return {
+    decisionsByDay: byDay.rows.map((r) => ({
+      day: r.day,
+      interested: Number(r.interested),
+      rejected: Number(r.rejected),
+    })),
+    runs: runs.rows as Analytics["runs"],
+    scoreBuckets: buckets.rows.map((r) => ({
+      bucket: r.bucket,
+      count: Number(r.count),
+      floor: Number(r.floor),
+    })),
+    topCompanies: companies.rows.map((r) => ({
+      company: r.company,
+      jobs: Number(r.jobs),
+      best: Number(r.best),
+    })),
+    bySource: sources.rows.map((r) => ({
+      source: r.source,
+      jobs: Number(r.jobs),
+      median: Number(r.median ?? 0),
+      withSalary: Number(r.withsalary),
+    })),
+    signalRates: signals.rows.map((r) => ({
+      name: r.name,
+      weight: Number(r.weight),
+      matched: Number(r.matched),
+      pct: Number(r.pct ?? 0),
+    })),
+    funnel: {
+      seen: Number(f["seen"] ?? 0),
+      queued: Number(f["queued"] ?? 0),
+      decided: Number(f["decided"] ?? 0),
+      interested: Number(f["interested"] ?? 0),
+      applied: Number(f["applied"] ?? 0),
+    },
+  };
+}
+
+// -------------------------------------------------------------------- scout
+
+export type ScanStep = {
+  id: string;
+  stage: string;
+  label: string | null;
+  status: string;
+  detail: string | null;
+  fetched: number | null;
+  inserted: number | null;
+  closed: number | null;
+  at: string;
+};
+
+export type Scout = {
+  run: {
+    id: string;
+    started_at: string;
+    finished_at: string | null;
+    companies: number | null;
+    ok: number | null;
+    failed: number | null;
+    inserted: number | null;
+    updated: number | null;
+  } | null;
+  steps: ScanStep[];
+  running: boolean;
+  targets: Array<{
+    label: string;
+    kind: string;
+    interval: number;
+    last_ok_at: string | null;
+    last_error: string | null;
+    due: boolean;
+  }>;
+};
+
+export async function scout(): Promise<Scout> {
+  const [runRows, targets] = await Promise.all([
+    pool().query(
+      `select id::text, started_at, finished_at, companies, ok, failed, inserted, updated
+         from runs order by id desc limit 1`,
+    ),
+    pool().query(
+      `select ats || '/' || token as label, 'ats' as kind, min_interval_minutes as interval,
+              last_ok_at, last_error,
+              (last_ok_at is null or last_ok_at < now() - make_interval(mins => min_interval_minutes)) as due
+         from companies where active
+        union all
+       select 'feed/' || name, 'feed', min_interval_minutes, last_ok_at, last_error,
+              (last_ok_at is null or last_ok_at < now() - make_interval(mins => min_interval_minutes))
+         from sources where active
+        order by 1`,
+    ),
+  ]);
+
+  const run = (runRows.rows[0] as Scout["run"]) ?? null;
+  const steps = run
+    ? (
+        await pool().query<ScanStep>(
+          `select id::text, stage, label, status, detail, fetched, inserted, closed, at
+             from scan_progress where run_id = $1 order by id`,
+          [run.id],
+        )
+      ).rows
+    : [];
+
+  return {
+    run,
+    steps,
+    running: !!run && run.finished_at === null,
+    targets: targets.rows as Scout["targets"],
+  };
+}
+
+// ----------------------------------------------------------------- shell
+
+export type NavCounts = {
+  queue: number;
+  applications: number;
+  scoutRunning: boolean;
+  scoutLabel: string;
+  scoutDone: number;
+  scoutTotal: number;
+  scoutState: "running" | "ok" | "failed" | "idle";
+  lastRunAt: string | null;
+  failing: number;
+};
+
+/** Everything the shell needs: nav badges plus the live scout block. */
+export async function navCounts(): Promise<NavCounts> {
+  const { rows } = await pool().query<Record<string, string | null>>(
+    `select
+       (select count(distinct fingerprint) from jobs
+         where score is not null and not closed
+           and not exists (select 1 from decisions d where d.job_id = jobs.id))::text as queue,
+       (select count(distinct j.fingerprint) from jobs j join decisions d on d.job_id = j.id
+         where d.decision = 'interested')::text as applications,
+       (select (count(*) filter (where active and last_error is not null)) from companies)::text as failing_a,
+       (select (count(*) filter (where active and last_error is not null)) from sources)::text as failing_b,
+       (select id::text from runs order by id desc limit 1) as run_id,
+       (select started_at::text from runs order by id desc limit 1) as started_at,
+       (select finished_at::text from runs order by id desc limit 1) as finished_at,
+       (select companies::text from runs order by id desc limit 1) as targets`,
+  );
+
+  const r = rows[0] ?? {};
+  const runId = r["run_id"];
+  const finished = r["finished_at"];
+
+  let done = 0;
+  let total = Number(r["targets"] ?? 0);
+  let label = "Idle";
+  let state: NavCounts["scoutState"] = "idle";
+
+  if (runId) {
+    const { rows: steps } = await pool().query<{ stage: string; status: string; label: string | null }>(
+      `select stage, status, label from scan_progress where run_id = $1 order by id`,
+      [runId],
+    );
+    done = steps.filter((s) => s.stage === "target" && s.status !== "running").length;
+    if (total === 0) total = Math.max(done, steps.filter((s) => s.stage === "target").length);
+
+    const running = !finished;
+    const last = steps.at(-1);
+    state = running ? "running" : steps.some((s) => s.status === "failed") ? "failed" : "ok";
+    label = running
+      ? last?.label
+        ? `Scanning ${last.label}`
+        : "Scanning"
+      : state === "failed"
+        ? "Last scan had failures"
+        : "Last scan clean";
+  }
+
+  return {
+    queue: Number(r["queue"] ?? 0),
+    applications: Number(r["applications"] ?? 0),
+    scoutRunning: !!runId && !finished,
+    scoutLabel: label,
+    scoutDone: done,
+    scoutTotal: total,
+    scoutState: state,
+    lastRunAt: finished ?? r["started_at"] ?? null,
+    failing: Number(r["failing_a"] ?? 0) + Number(r["failing_b"] ?? 0),
+  };
+}
+
+// ------------------------------------------------------------------ settings
+
+export type SettingsData = {
+  companies: Array<{ name: string; ats: string; token: string; active: boolean; interval: number; last_error: string | null }>;
+  sources: Array<{ name: string; kind: string; url: string; active: boolean; interval: number; attribution: string | null }>;
+  profileChars: number;
+};
+
+export async function settings(): Promise<SettingsData> {
+  const [companies, sources] = await Promise.all([
+    pool().query(
+      `select name, ats, token, active, min_interval_minutes as interval, last_error
+         from companies order by name limit 200`,
+    ),
+    pool().query(
+      `select name, kind, url, active, min_interval_minutes as interval,
+              case when attribution_required then attribution_text else null end as attribution
+         from sources order by name`,
+    ),
+  ]);
+
+  return {
+    companies: companies.rows as SettingsData["companies"],
+    sources: sources.rows as SettingsData["sources"],
+    profileChars: 0,
   };
 }
