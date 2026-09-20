@@ -1,6 +1,7 @@
 "use server";
 
 import { pool } from "./db";
+import { STATUSES } from "./pipeline";
 
 const DECISIONS = new Set(["interested", "rejected"]);
 
@@ -61,6 +62,36 @@ export async function saveNote(fingerprint: string, note: string): Promise<Actio
       `update decisions set note = $2
         where job_id in (select id from jobs where fingerprint = $1)`,
       [fingerprint, note.trim() === "" ? null : note.trim()],
+    );
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+const VALID = new Set<string>(STATUSES);
+
+/**
+ * Move a role along the application pipeline. `applied_at` is stamped the
+ * first time the role reaches "applied" and left alone afterwards, so the date
+ * records when you sent it rather than when you last dragged the card.
+ * "Interested" and "Applying" both sit before sending, so both clear it.
+ */
+export async function setStatus(fingerprint: string, status: string): Promise<ActionResult> {
+  if (!fingerprint) return { ok: false, error: "no fingerprint" };
+  if (!VALID.has(status)) return { ok: false, error: `unknown status "${status}"` };
+
+  try {
+    await pool().query(
+      `update decisions
+          set status = $2,
+              applied_at = case
+                when $2 in ('interested', 'applying') then null
+                when applied_at is null then now()
+                else applied_at
+              end
+        where job_id in (select id from jobs where fingerprint = $1)`,
+      [fingerprint, status],
     );
     return { ok: true };
   } catch (err) {

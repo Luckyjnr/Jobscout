@@ -81,6 +81,23 @@ create table if not exists decisions (
 
 create index if not exists decisions_decision_idx on decisions (decision);
 
+-- where an interested job sits in the application pipeline. `decision` says
+-- whether you want it; `status` says how far it has got. Only meaningful for
+-- decision = 'interested'; a rejected job keeps the default and is never shown
+-- on the board.
+alter table decisions add column if not exists status text not null default 'interested';
+alter table decisions add column if not exists applied_at timestamptz;
+
+-- the pipeline states, and a one-time rename of the two that changed. The
+-- constraint is dropped first so the rename cannot trip over the old set.
+alter table decisions drop constraint if exists decisions_status_check;
+update decisions set status = 'applying' where status = 'screening';
+update decisions set status = 'rejected' where status = 'closed';
+alter table decisions add constraint decisions_status_check
+  check (status in ('interested', 'applying', 'applied', 'interview', 'offer', 'rejected'));
+
+create index if not exists decisions_status_idx on decisions (status);
+
 -- feed sources that are not per-company ATS boards: RSS and JSON job feeds.
 -- min_interval_minutes is a floor the crawler respects, because some feeds ask
 -- to be polled far less often than others (Jobicy: "a few times daily").
