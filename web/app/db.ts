@@ -348,7 +348,24 @@ export async function dashboard(): Promise<Dashboard> {
 
 // ---------------------------------------------------------------- analytics
 
+/** The raw score above which a job counts as a strong match on the charts. */
+export const STRONG_SCORE = 50;
+
 export type Analytics = {
+  /** one row per day for the last 30, zero-filled so the line has no gaps */
+  discovered: Array<{ day: string; discovered: number; matched: number }>;
+  /** buckets of ten across the whole observed score range */
+  scoreHistogram: Array<{ floor: number; label: string; count: number; strong: boolean }>;
+  /** applications sent per ISO week for the last eight */
+  applicationsByWeek: Array<{ week: string; label: string; count: number }>;
+  /**
+   * Of the applications actually sent, how many reached an interview, and how
+   * many drew any answer at all. "Rejected" is the only signal the schema has
+   * for a negative answer, and it is a state you set by hand — so a role you
+   * closed yourself counts the same as one they closed on you. There is no
+   * column that tells the two apart.
+   */
+  rates: { applied: number; interviewed: number; answered: number };
   decisionsByDay: Array<{ day: string; interested: number; rejected: number }>;
   runs: Array<{
     id: string;
@@ -367,7 +384,8 @@ export type Analytics = {
 };
 
 export async function analytics(): Promise<Analytics> {
-  const [byDay, runs, buckets, companies, sources, signals, funnel] = await Promise.all([
+  const [byDay, runs, buckets, companies, sources, signals, funnel, discovered, histogram, byWeek, rates] =
+    await Promise.all([
     pool().query<{ day: string; interested: string; rejected: string }>(
       `select to_char(date_trunc('day', d.decided_at), 'YYYY-MM-DD') as day,
               count(*) filter (where d.decision = 'interested')::text as interested,
@@ -408,12 +426,15 @@ export async function analytics(): Promise<Analytics> {
     ),
     pool().query<{ name: string; weight: string; matched: string; pct: string }>(
       `select s->>'name' as name,
-              (s->>'weight')::int::text as weight,
+              coalesce(
+                round(avg((s->>'weight')::int) filter (where (s->>'matched')::boolean)),
+                round(avg((s->>'weight')::int))
+              )::int::text as weight,
               count(*) filter (where (s->>'matched')::boolean)::text as matched,
               round(100.0 * count(*) filter (where (s->>'matched')::boolean) / nullif(count(*), 0), 1)::text as pct
          from jobs, lateral jsonb_array_elements(score_signals) s
         where not closed
-        group by 1, 2 order by 4 desc nulls last`,
+        group by 1 order by 4 desc nulls last`,
     ),
     pool().query<Record<string, string>>(
       `select
@@ -425,10 +446,88 @@ export async function analytics(): Promise<Analytics> {
          (select count(distinct j.fingerprint) from jobs j join decisions d on d.job_id = j.id
            where d.decision = 'interested' and d.applied_at is not null)::text as applied`,
     ),
+
+    // every day of the last 30, whether or not anything landed on it, so the
+    // line is continuous rather than skipping quiet days
+    pool().query<{ day: string; discovered: string; matched: string }>(
+      `select to_char(d.day, 'YYYY-MM-DD') as day,
+              count(j.id)::text as discovered,
+              count(j.id) filter (where j.score > $1)::text as matched
+         from generate_series(
+                date_trunc('day', now()) - interval '29 days',
+                date_trunc('day', now()),
+                interval '1 day') as d(day)
+         left join jobs j on date_trunc('day', j.created_at) = d.day
+        group by d.day order by d.day`,
+      [STRONG_SCORE],
+    ),
+
+    // zero-filled across the observed range: a histogram that omits its empty
+    // buckets puts 70 next to 90 and implies there is nothing between them
+    pool().query<{ floor: string; count: string }>(
+      `with scored as (
+         select (floor(score / 10.0) * 10)::int as bucket
+           from jobs where score is not null and not closed
+       ), bounds as (
+         select min(bucket) as lo, max(bucket) as hi from scored
+       )
+       select g.bucket::text as floor, count(s.bucket)::text as count
+         from bounds, generate_series(bounds.lo, bounds.hi, 10) as g(bucket)
+         left join scored s on s.bucket = g.bucket
+        group by g.bucket order by g.bucket`,
+    ),
+
+    pool().query<{ week: string; count: string }>(
+      `select to_char(w.week, 'YYYY-MM-DD') as week,
+              count(d.id)::text as count
+         from generate_series(
+                date_trunc('week', now()) - interval '7 weeks',
+                date_trunc('week', now()),
+                interval '1 week') as w(week)
+         left join decisions d
+           on d.applied_at is not null and date_trunc('week', d.applied_at) = w.week
+        group by w.week order by w.week`,
+    ),
+
+    pool().query<Record<string, string>>(
+      `select
+         count(*) filter (where applied_at is not null)::text as applied,
+         count(*) filter (where applied_at is not null
+                            and status in ('interview', 'offer'))::text as interviewed,
+         count(*) filter (where applied_at is not null
+                            and status in ('interview', 'offer', 'rejected'))::text as answered
+         from decisions`,
+    ),
   ]);
 
   const f = funnel.rows[0] ?? {};
+  const r = rates.rows[0] ?? {};
+
   return {
+    discovered: discovered.rows.map((row) => ({
+      day: row.day,
+      discovered: Number(row.discovered),
+      matched: Number(row.matched),
+    })),
+    scoreHistogram: histogram.rows.map((row) => {
+      const floor = Number(row.floor);
+      return {
+        floor,
+        label: `${floor}`,
+        count: Number(row.count),
+        strong: floor >= STRONG_SCORE,
+      };
+    }),
+    applicationsByWeek: byWeek.rows.map((row) => ({
+      week: row.week,
+      label: `W${isoWeek(new Date(row.week))}`,
+      count: Number(row.count),
+    })),
+    rates: {
+      applied: Number(r["applied"] ?? 0),
+      interviewed: Number(r["interviewed"] ?? 0),
+      answered: Number(r["answered"] ?? 0),
+    },
     decisionsByDay: byDay.rows.map((r) => ({
       day: r.day,
       interested: Number(r.interested),
@@ -641,4 +740,21 @@ export async function settings(): Promise<SettingsData> {
     sources: sources.rows as SettingsData["sources"],
     profileChars: 0,
   };
+}
+
+/**
+ * ISO-8601 week number, for the W31 labels on the applications chart.
+ * Postgres could give this directly, but the week has to be derived from the
+ * same bucket boundary the query grouped on, so it is done here from the
+ * bucket's own start date.
+ */
+export function isoWeek(date: Date): number {
+  const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  // ISO weeks run Monday to Sunday and are numbered by the Thursday they contain
+  const dayNumber = (d.getUTCDay() + 6) % 7;
+  d.setUTCDate(d.getUTCDate() - dayNumber + 3);
+  const firstThursday = new Date(Date.UTC(d.getUTCFullYear(), 0, 4));
+  const firstDayNumber = (firstThursday.getUTCDay() + 6) % 7;
+  firstThursday.setUTCDate(firstThursday.getUTCDate() - firstDayNumber + 3);
+  return 1 + Math.round((d.getTime() - firstThursday.getTime()) / (7 * 86_400_000));
 }

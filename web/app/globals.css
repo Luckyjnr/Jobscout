@@ -1771,3 +1771,126 @@ kbd {
   .job-head-acts .btn { flex: 1; justify-content: center; }
   .job-title { font-size: 22px; }
 }
+
+/* ============================================================ SVG charts */
+
+.chart svg { display: block; width: 100%; height: auto; }
+
+.c-label {
+  fill: #8B94A7;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 11px;
+}
+
+/* the line draws itself in; the dash length is the longest path we draw */
+.c-line {
+  stroke-dasharray: 2400;
+  stroke-dashoffset: 2400;
+}
+
+.chart[data-shown="true"] .c-line {
+  animation: draw 900ms var(--ease) forwards;
+}
+
+.c-area { opacity: 0; }
+.chart[data-shown="true"] .c-area { animation: fade-in 700ms var(--ease) 250ms forwards; }
+
+@keyframes draw {
+  to { stroke-dashoffset: 0; }
+}
+
+.c-legend {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 10px;
+  color: var(--slate);
+  font-size: 11px;
+}
+
+.c-legend i {
+  display: inline-block;
+  width: 9px;
+  height: 3px;
+  border-radius: 2px;
+  margin-right: 6px;
+  vertical-align: 2px;
+}
+
+.c-legend b {
+  margin-left: auto;
+  color: var(--ink-2);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.c-caption {
+  margin: 12px 0 0;
+  color: var(--faint);
+  font-size: 11px;
+}
+
+/* histograms */
+
+.hist-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 180px;
+}
+
+.hist-col {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.hist-col i {
+  display: block;
+  border-radius: 3px 3px 0 0;
+  transition: height 520ms var(--ease);
+}
+
+.hist-col small {
+  color: #8B94A7;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 11px;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hist-col:hover i { filter: brightness(1.25); }
+
+.hist-tip {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  translate: -50% -6px;
+  z-index: 5;
+  padding: 5px 9px;
+  border: 1px solid var(--border-loud);
+  border-radius: var(--radius-xs);
+  background: var(--raised);
+  box-shadow: var(--shadow-lift);
+  color: var(--ink);
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.weeks .hist-bars { height: 150px; }
+
+/* the two rate cards read as a fraction, not a bare number */
+.rate .value small {
+  margin-left: 6px;
+  color: var(--faint);
+  font-size: 12px;
+  font-weight: 400;
+}

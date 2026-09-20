@@ -1,4 +1,5 @@
-import { analytics } from "../db";
+import { analytics, STRONG_SCORE } from "../db";
+import { ApplicationsOverTime, DiscoveredOverTime, ScoreDistribution } from "./charts";
 
 export const dynamic = "force-dynamic";
 
@@ -9,7 +10,14 @@ function day(iso: string): string {
 export default async function AnalyticsPage() {
   const a = await analytics();
   const maxDay = Math.max(...a.decisionsByDay.map((d) => d.interested + d.rejected), 1);
-  const maxBucket = Math.max(...a.scoreBuckets.map((b) => b.count), 1);
+  const scored = a.scoreHistogram.reduce((sum, bucket) => sum + bucket.count, 0);
+
+  // both rates are shares of the applications actually sent, so a pipeline
+  // with nothing sent shows a dash rather than a division by zero
+  const pct = (part: number) =>
+    a.rates.applied === 0 ? null : Math.round((part / a.rates.applied) * 100);
+  const interviewRate = pct(a.rates.interviewed);
+  const responseRate = pct(a.rates.answered);
   const funnel = [
     { label: "Seen", value: a.funnel.seen },
     { label: "Scored and open", value: a.funnel.queued },
@@ -50,6 +58,61 @@ export default async function AnalyticsPage() {
         </div>
       </section>
 
+      <div className="grid cols-4">
+        <div className="stat">
+          <span className="value">{a.funnel.applied.toLocaleString()}</span>
+          <span className="label">Applications sent</span>
+          <span className="foot">of {a.funnel.interested.toLocaleString()} saved</span>
+        </div>
+        <div className="stat rate">
+          <span className="value">
+            {interviewRate === null ? "—" : `${interviewRate}%`}
+            {interviewRate === null ? null : <small>{a.rates.interviewed}/{a.rates.applied}</small>}
+          </span>
+          <span className="label">Interview rate</span>
+          <span className="foot">reached interview or offer</span>
+        </div>
+        <div className="stat rate">
+          <span className="value">
+            {responseRate === null ? "—" : `${responseRate}%`}
+            {responseRate === null ? null : <small>{a.rates.answered}/{a.rates.applied}</small>}
+          </span>
+          <span className="label">Response rate</span>
+          <span className="foot">moved past Applied either way</span>
+        </div>
+        <div className="stat">
+          <span className="value">{scored.toLocaleString()}</span>
+          <span className="label">Scored and open</span>
+          <span className="foot">above {STRONG_SCORE} counts as strong</span>
+        </div>
+      </div>
+
+      <section className="panel">
+        <header>
+          <h3>Discovered over time</h3>
+          <span className="sub">last 30 days · matched means scoring above {STRONG_SCORE}</span>
+        </header>
+        <DiscoveredOverTime data={a.discovered} />
+      </section>
+
+      <div className="grid cols-2">
+        <section className="panel">
+          <header>
+            <h3>Score distribution</h3>
+            <span className="sub">buckets of ten</span>
+          </header>
+          <ScoreDistribution data={a.scoreHistogram} total={scored} />
+        </section>
+
+        <section className="panel">
+          <header>
+            <h3>Applications over time</h3>
+            <span className="sub">last 8 weeks</span>
+          </header>
+          <ApplicationsOverTime data={a.applicationsByWeek} />
+        </section>
+      </div>
+
       <div className="grid cols-2">
         <section className="panel">
           <header>
@@ -73,26 +136,6 @@ export default async function AnalyticsPage() {
 
         <section className="panel">
           <header>
-            <h3>Score distribution</h3>
-            <span className="sub">open jobs</span>
-          </header>
-          <div className="bars">
-            {a.scoreBuckets.map((bucket) => (
-              <div className="bar-row" key={bucket.bucket} >
-                <span className="mono">{bucket.bucket}</span>
-                <span className="track">
-                  <span style={{ width: `${(bucket.count / maxBucket) * 100}%` }} />
-                </span>
-                <span className="n mono">{bucket.count}</span>
-              </div>
-            ))}
-          </div>
-        </section>
-      </div>
-
-      <div className="grid cols-2">
-        <section className="panel">
-          <header>
             <h3>Signal fire rates</h3>
             <span className="sub">a signal firing on everything is a constant</span>
           </header>
@@ -108,7 +151,9 @@ export default async function AnalyticsPage() {
             ))}
           </div>
         </section>
+      </div>
 
+      <div className="grid cols-2">
         <section className="panel">
           <header>
             <h3>By source</h3>
