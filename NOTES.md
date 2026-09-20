@@ -52,3 +52,9 @@
 - scripts/score.ts was building Job with postedAt: null. Harmless until a
   rule read it, then silently dead. Same shortcut still in llm-score.ts.
 - Recency bands moved median score 0 -> 15.
+- Funnel bug: "applied onward" counted status != interested, so rejected rows
+  pushed it above the earlier stage. Count applied_at is not null instead.
+- Second copies of a shared list drift silently. actions.ts had its own state
+  list; scripts/score.ts built Job with postedAt: null. Same failure mode.
+- State rename lives in schema.sql as idempotent updates. Deliberate: no
+  migration framework, and a forgotten one-off script is worse.
