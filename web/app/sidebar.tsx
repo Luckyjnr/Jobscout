@@ -128,9 +128,9 @@ export function Sidebar({
     <div className="sidebar-inner">
       <div className="sheet-handle" />
 
-      <div className="brand">
+      <div className="filter-head">
         <span className="dot" />
-        <h1>jobscout</h1>
+        <h2>Filters</h2>
         {countActive(filters) > 0 ? (
           <button className="clear" onClick={reset} type="button">
             clear {countActive(filters)}

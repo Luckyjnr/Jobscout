@@ -1,36 +1,33 @@
 import type { Metadata, Viewport } from "next";
-import { IBM_Plex_Mono, Inter_Tight } from "next/font/google";
+import { Geist, Geist_Mono } from "next/font/google";
+import { navCounts } from "./db";
+import { Shell } from "./shell";
 import "./globals.css";
 
-const ui = Inter_Tight({
-  subsets: ["latin"],
-  variable: "--font-ui",
-  display: "swap",
-});
-
-const mono = IBM_Plex_Mono({
-  subsets: ["latin"],
-  weight: ["400", "500", "600"],
-  variable: "--font-mono",
-  display: "swap",
-});
+const ui = Geist({ subsets: ["latin"], variable: "--font-ui", display: "swap" });
+const mono = Geist_Mono({ subsets: ["latin"], variable: "--font-mono", display: "swap" });
 
 export const metadata: Metadata = {
   title: "jobscout",
-  description: "Review queue",
+  description: "A job-finding agent",
 };
 
 export const viewport: Viewport = {
-  themeColor: "#F4F5FA",
+  themeColor: "#0A0D14",
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  // the shell shows live counts, so it reads on every navigation
+  const counts = await navCounts();
+
   return (
     <html lang="en" className={`${ui.variable} ${mono.variable}`}>
-      <body>{children}</body>
+      <body>
+        <Shell counts={counts}>{children}</Shell>
+      </body>
     </html>
   );
 }
