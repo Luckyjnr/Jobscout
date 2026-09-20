@@ -2,7 +2,7 @@ import "dotenv/config";
 import pg from "pg";
 import type { Status } from "./pipeline";
 
-export { STATUSES, STATUS_LABELS, type Status } from "./pipeline";
+export { STATUSES, STATUS_LABELS, STATUS_META, type Status } from "./pipeline";
 
 const { Pool } = pg;
 
@@ -757,4 +757,267 @@ export function isoWeek(date: Date): number {
   const firstDayNumber = (firstThursday.getUTCDay() + 6) % 7;
   firstThursday.setUTCDate(firstThursday.getUTCDate() - firstDayNumber + 3);
   return 1 + Math.round((d.getTime() - firstThursday.getTime()) / (7 * 86_400_000));
+}
+
+// ------------------------------------------------------------ home screen
+
+export type StageName = "Searching" | "Analyzing" | "Matching" | "Ranking" | "Notifying";
+
+export type Stage = {
+  name: StageName;
+  /** "done" and "running" are observed; "waiting" has not started yet */
+  state: "done" | "running" | "waiting" | "unavailable";
+  detail: string;
+};
+
+export type NextStep =
+  | { kind: "apply"; fingerprint: string; title: string; company: string; score: number }
+  | { kind: "interview"; fingerprint: string; title: string; company: string; since: string | null }
+  | { kind: "review"; fingerprint: string; title: string; company: string; since: string | null };
+
+export type Home = {
+  /** jobs first seen since the timestamp the caller passed, or in the last day */
+  sinceLastVisit: number;
+  sinceIsFallback: boolean;
+
+  stats: {
+    newToday: number;
+    newYesterday: number;
+    strongOpen: number;
+    strongThisWeek: number;
+    saved: number;
+    needAction: number;
+    applications: number;
+    interviews: number;
+  };
+
+  scout: {
+    runId: string | null;
+    startedAt: string | null;
+    finishedAt: string | null;
+    running: boolean;
+    activity: string;
+    stages: Stage[];
+    sourcesScanned: number;
+    jobsAnalyzed: number;
+    relevantMatches: number;
+  };
+
+  nextSteps: NextStep[];
+  recommended: Row[];
+  pipeline: Array<{ status: Status; count: number }>;
+  pipelineTotal: number;
+  feed: Array<{ at: string; label: string; detail: string; state: string }>;
+};
+
+/**
+ * Everything the home screen shows, in one round trip's worth of parallel
+ * queries. `since` is the timestamp of the viewer's last visit, read from a
+ * cookie; with no cookie there is no "since", so the count falls back to the
+ * last 24 hours and says so.
+ */
+export async function home(since: Date | null): Promise<Home> {
+  const sinceOrDay = since ?? new Date(Date.now() - 86_400_000);
+
+  const [visit, stats, run, progress, steps, recommended, pipeline, feed] = await Promise.all([
+    pool().query<{ n: string }>(
+      `select count(*)::text as n from jobs where created_at > $1 and not closed`,
+      [sinceOrDay],
+    ),
+
+    pool().query<Record<string, string>>(
+      `select
+         (select count(*) from jobs
+           where created_at >= date_trunc('day', now()) and not closed)::text as new_today,
+         (select count(*) from jobs
+           where created_at >= date_trunc('day', now()) - interval '1 day'
+             and created_at < date_trunc('day', now()) and not closed)::text as new_yesterday,
+         (select count(distinct fingerprint) from jobs
+           where score > $1 and not closed)::text as strong_open,
+         (select count(distinct fingerprint) from jobs
+           where score > $1 and not closed
+             and created_at >= date_trunc('week', now()))::text as strong_this_week,
+         (select count(*) from decisions where decision = 'interested')::text as saved,
+         -- saved three days ago or more and still not sent
+         (select count(*) from decisions
+           where decision = 'interested' and applied_at is null
+             and decided_at < now() - interval '3 days')::text as need_action,
+         (select count(*) from decisions where applied_at is not null)::text as applications,
+         (select count(*) from decisions where status = 'interview')::text as interviews`,
+      [STRONG_SCORE],
+    ),
+
+    pool().query<{
+      id: string; started_at: string; finished_at: string | null;
+      companies: number | null; ok: number | null; failed: number | null;
+      fetched: number | null; inserted: number | null;
+    }>(
+      `select id::text, started_at, finished_at, companies, ok, failed, fetched, inserted
+         from runs order by id desc limit 1`,
+    ),
+
+    pool().query<{ stage: string; status: string; label: string | null; detail: string | null; at: string }>(
+      `select stage, status, label, detail, at
+         from scan_progress
+        where run_id = (select max(id) from runs)
+        order by id desc`,
+    ),
+
+    // the three "what to do next" candidates, each the single best of its kind
+    pool().query<{ kind: string; fingerprint: string; title: string; company: string; score: number; since: string | null }>(
+      `(select 'apply' as kind, j.fingerprint, j.title, j.company, j.score, null::timestamptz as since
+          from jobs j
+         where j.score is not null and not j.closed
+           and not exists (select 1 from decisions d where d.job_id = j.id)
+         order by j.score desc limit 1)
+       union all
+       (select 'interview', j.fingerprint, j.title, j.company, j.score, d.applied_at
+          from jobs j join decisions d on d.job_id = j.id
+         where d.status = 'interview'
+         order by d.applied_at desc nulls last limit 1)
+       union all
+       (select 'review', j.fingerprint, j.title, j.company, j.score, d.decided_at
+          from jobs j join decisions d on d.job_id = j.id
+         where d.decision = 'interested' and d.applied_at is null
+           and d.decided_at < now() - interval '3 days'
+         order by d.decided_at asc limit 1)`,
+    ),
+
+    pool().query<Row>(
+      `select ${GROUPED_COLUMNS}, null::text as note, null::timestamptz as decided_at
+         from jobs j
+        where j.score is not null and not j.closed
+          and not exists (select 1 from decisions d where d.job_id = j.id)
+        group by j.fingerprint
+        order by max(j.score) desc, max(j.posted_at) desc nulls last
+        limit 3`,
+    ),
+
+    pool().query<{ status: Status; count: string }>(
+      `select status, count(*)::text as count
+         from decisions where decision = 'interested' group by status`,
+    ),
+
+    // The activity feed. A target writes a "running" row and then an "ok" or
+    // "failed" one, so distinct on (stage, label) keeps only where each board
+    // ended up — otherwise every board appears twice.
+    pool().query<{ at: string; label: string; detail: string; state: string }>(
+      `(select at, label, detail, state from (
+          select distinct on (stage, label)
+                 at, coalesce(label, stage) as label,
+                 coalesce(detail, '') as detail, status as state
+            from scan_progress
+           order by stage, label, id desc
+        ) latest order by at desc limit 8)
+        union all
+       (select coalesce(finished_at, started_at) as at,
+               'run #' || id::text as label,
+               coalesce(inserted, 0)::text || ' new, ' || coalesce(updated, 0)::text || ' refreshed' as detail,
+               case when finished_at is null then 'running'
+                    when coalesce(failed, 0) > 0 then 'failed' else 'ok' end as state
+          from runs order by id desc limit 4)
+        order by at desc`,
+    ),
+  ]);
+
+  const s = stats.rows[0] ?? {};
+  const n = (key: string) => Number(s[key] ?? 0);
+
+  const latest = run.rows[0] ?? null;
+  const running = latest !== null && latest.finished_at === null;
+  const targets = progress.rows.filter((row) => row.stage === "target");
+  const finishedTargets = targets.filter((row) => row.status !== "running");
+  const doneRow = progress.rows.find((row) => row.stage === "done");
+
+  const jobsAnalyzed = Number(latest?.fetched ?? 0);
+  const inserted = Number(latest?.inserted ?? 0);
+
+  const searching: Stage = doneRow
+    ? { name: "Searching", state: "done", detail: `${finishedTargets.length} boards scanned` }
+    : running
+      ? { name: "Searching", state: "running", detail: `${finishedTargets.length} of ${targets.length} boards` }
+      : { name: "Searching", state: "waiting", detail: "idle" };
+
+  /**
+   * Scoring runs as its own script and writes no progress rows, so these three
+   * are derived from the jobs themselves rather than from a stage the crawler
+   * reports. They complete together because scoring is a single pass.
+   */
+  const scoredAll = inserted === 0 || !running;
+  const scoringStage = (name: StageName, detail: string): Stage => ({
+    name,
+    state: doneRow || scoredAll ? "done" : "running",
+    detail,
+  });
+
+  const stages: Stage[] = [
+    searching,
+    scoringStage("Analyzing", `${jobsAnalyzed.toLocaleString()} postings read`),
+    scoringStage("Matching", "signals matched per posting"),
+    scoringStage("Ranking", "ordered by score"),
+    // there is no notifier in this codebase — no table, no sender, no schedule
+    { name: "Notifying", state: "unavailable", detail: "not built" },
+  ];
+
+  const activity = running
+    ? (progress.rows.find((row) => row.status === "running")?.label ?? "scanning")
+    : latest
+      ? `last scan finished · ${inserted} new, ${Number(latest.ok ?? 0)} boards ok`
+      : "no scan has run yet";
+
+  return {
+    sinceLastVisit: Number(visit.rows[0]?.n ?? 0),
+    sinceIsFallback: since === null,
+    stats: {
+      newToday: n("new_today"),
+      newYesterday: n("new_yesterday"),
+      strongOpen: n("strong_open"),
+      strongThisWeek: n("strong_this_week"),
+      saved: n("saved"),
+      needAction: n("need_action"),
+      applications: n("applications"),
+      interviews: n("interviews"),
+    },
+    scout: {
+      runId: latest?.id ?? null,
+      startedAt: latest?.started_at ?? null,
+      finishedAt: latest?.finished_at ?? null,
+      running,
+      activity,
+      stages,
+      sourcesScanned: Number(latest?.companies ?? targets.length),
+      jobsAnalyzed,
+      relevantMatches: n("strong_open"),
+    },
+    nextSteps: steps.rows.map((row) =>
+      row.kind === "apply"
+        ? { kind: "apply", fingerprint: row.fingerprint, title: row.title, company: row.company, score: row.score }
+        : {
+            kind: row.kind as "interview" | "review",
+            fingerprint: row.fingerprint,
+            title: row.title,
+            company: row.company,
+            since: row.since,
+          },
+    ),
+    recommended: recommended.rows.map(trim),
+    pipeline: pipeline.rows.map((row) => ({ status: row.status, count: Number(row.count) })),
+    pipelineTotal: pipeline.rows.reduce((sum, row) => sum + Number(row.count), 0),
+    feed: feed.rows,
+  };
+}
+
+/**
+ * The crawl workflow's cron, mirrored here so the home screen can say when the
+ * next one is due. If .github/workflows/crawl.yml changes, this changes with it.
+ */
+export const CRAWL_EVERY_HOURS = 6;
+
+/** Minutes until the next scheduled crawl, on a "0 star/6" hourly cron. */
+export function minutesToNextScan(now = new Date()): number {
+  const next = new Date(now);
+  next.setUTCMinutes(0, 0, 0);
+  const hour = now.getUTCHours();
+  next.setUTCHours((Math.floor(hour / CRAWL_EVERY_HOURS) + 1) * CRAWL_EVERY_HOURS);
+  return Math.max(0, Math.round((next.getTime() - now.getTime()) / 60_000));
 }
