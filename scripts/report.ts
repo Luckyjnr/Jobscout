@@ -12,6 +12,16 @@ import { pool } from "../src/db.js";
 const GOOD_SCORE = 50;
 const LIST_LIMIT = 15;
 
+/**
+ * A posting older than this is stored, but never counted as new.
+ *
+ * Feeds backfill and reorder. The first time we read a feed, or any time a
+ * board reshuffles its ids, hundreds of months-old postings arrive looking
+ * brand new — and a digest that shouts about a job from March is a digest you
+ * stop reading. Age is judged on the posting date, not on when we first saw it.
+ */
+const MAX_NEW_AGE_DAYS = 7;
+
 type Run = {
   id: string;
   started_at: Date;
@@ -30,12 +40,12 @@ type NewJob = {
   url: string;
   salary_text: string | null;
   location: string | null;
+  source: string;
 };
 
 type Failure = {
   name: string;
-  ats: string;
-  token: string;
+  kind: string;
   last_error: string;
   last_ok_at: Date | null;
 };
@@ -64,17 +74,32 @@ if (!run) {
 
 const since = run.started_at;
 
-const [{ rows: newJobs }, { rows: failures }, { rows: totals }] = await Promise.all([
+const [{ rows: newJobs }, { rows: stale }, { rows: failures }, { rows: totals }] = await Promise.all([
   pool.query<NewJob>(
-    `select company, title, score, url, salary_text, location
-       from jobs where created_at >= $1
+    `select company, title, score, url, salary_text, location, source
+       from jobs
+      where created_at >= $1
+        -- stored, but too old to count as news
+        and (posted_at is null or posted_at >= now() - make_interval(days => $2::int))
       order by score desc nulls last, company
       limit 500`,
-    [since],
+    [since, MAX_NEW_AGE_DAYS],
+  ),
+  pool.query<{ n: string }>(
+    `select count(*)::text as n
+       from jobs
+      where created_at >= $1
+        and posted_at is not null
+        and posted_at < now() - make_interval(days => $2::int)`,
+    [since, MAX_NEW_AGE_DAYS],
   ),
   pool.query<Failure>(
-    `select name, ats, token, last_error, last_ok_at
+    `select name, ats || '/' || token as kind, last_error, last_ok_at
        from companies
+      where active and last_error is not null
+      union all
+     select name, 'feed' as kind, last_error, last_ok_at
+       from sources
       where active and last_error is not null
       order by name`,
   ),
@@ -94,7 +119,11 @@ lines.push(
     (run.finished_at ? "" : "  **(did not finish)**"),
   "",
   `- boards: ${run.ok ?? "?"} ok, ${run.failed ?? "?"} failed of ${run.companies ?? "?"}`,
-  `- jobs: ${run.inserted ?? 0} new, ${run.updated ?? 0} refreshed`,
+  `- jobs: ${run.inserted ?? 0} stored, ${run.updated ?? 0} refreshed`,
+  `- of those, ${newJobs.length} are new enough to report` +
+    (Number(stale[0]?.n ?? 0) > 0
+      ? ` (${stale[0]?.n} suppressed as older than ${MAX_NEW_AGE_DAYS} days)`
+      : ""),
   `- corpus now: ${totals[0]?.jobs ?? "?"} jobs across ${totals[0]?.companies ?? "?"} active boards`,
   "",
 );
@@ -129,7 +158,7 @@ if (failures.length === 0) {
 } else {
   for (const failure of failures) {
     const lastOk = failure.last_ok_at ? failure.last_ok_at.toISOString().slice(0, 10) : "never";
-    lines.push(`- \`${failure.ats}/${failure.token}\` (${failure.name}) — last ok ${lastOk} — ${failure.last_error}`);
+    lines.push(`- \`${failure.kind}\` (${failure.name}) — last ok ${lastOk} — ${failure.last_error}`);
   }
   lines.push("");
 }
