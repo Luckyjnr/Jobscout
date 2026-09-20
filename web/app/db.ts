@@ -376,7 +376,6 @@ export type Analytics = {
     inserted: number | null;
     updated: number | null;
   }>;
-  scoreBuckets: Array<{ bucket: string; count: number; floor: number }>;
   topCompanies: Array<{ company: string; jobs: number; best: number }>;
   bySource: Array<{ source: string; jobs: number; median: number; withSalary: number }>;
   signalRates: Array<{ name: string; weight: number; matched: number; pct: number }>;
@@ -384,7 +383,7 @@ export type Analytics = {
 };
 
 export async function analytics(): Promise<Analytics> {
-  const [byDay, runs, buckets, companies, sources, signals, funnel, discovered, histogram, byWeek, rates] =
+  const [byDay, runs, companies, sources, signals, funnel, discovered, histogram, byWeek, rates] =
     await Promise.all([
     pool().query<{ day: string; interested: string; rejected: string }>(
       `select to_char(date_trunc('day', d.decided_at), 'YYYY-MM-DD') as day,
@@ -397,20 +396,6 @@ export async function analytics(): Promise<Analytics> {
     pool().query(
       `select id::text, started_at, finished_at, ok, failed, inserted, updated
          from runs order by id desc limit 14`,
-    ),
-    pool().query<{ bucket: string; count: string; floor: string }>(
-      `select case
-                when score >= 80 then '80+'
-                when score >= 60 then '60-79'
-                when score >= 40 then '40-59'
-                when score >= 20 then '20-39'
-                when score >= 0  then '0-19'
-                else 'below 0' end as bucket,
-              count(*)::text as count,
-              (case when score >= 80 then 80 when score >= 60 then 60 when score >= 40 then 40
-                    when score >= 20 then 20 when score >= 0 then 0 else -100 end)::text as floor
-         from jobs where score is not null and not closed
-        group by 1, 3 order by 3 desc`,
     ),
     pool().query<{ company: string; jobs: string; best: string }>(
       `select company, count(distinct fingerprint)::text as jobs, max(score)::text as best
@@ -534,11 +519,6 @@ export async function analytics(): Promise<Analytics> {
       rejected: Number(r.rejected),
     })),
     runs: runs.rows as Analytics["runs"],
-    scoreBuckets: buckets.rows.map((r) => ({
-      bucket: r.bucket,
-      count: Number(r.count),
-      floor: Number(r.floor),
-    })),
     topCompanies: companies.rows.map((r) => ({
       company: r.company,
       jobs: Number(r.jobs),
