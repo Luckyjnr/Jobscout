@@ -10,6 +10,7 @@ import {
   matchScore,
   matchSummary,
   skillChips,
+  seniorityFromTitle,
   skillsMatchedCount,
   type Presentable,
 } from "../src/scoring/present.js";
@@ -354,5 +355,26 @@ describe("the LLM takes precedence", () => {
       { fit: 80, reasons: [], concerns: [] },
     );
     expect(matchReasons(p).length).toBeGreaterThan(0);
+  });
+});
+
+describe("seniorityFromTitle", () => {
+  it("reads the level a title states", () => {
+    expect(seniorityFromTitle("Senior Backend Engineer")).toBe("Senior");
+    expect(seniorityFromTitle("Staff Software Engineer")).toBe("Staff");
+    expect(seniorityFromTitle("Principal Engineer")).toBe("Principal");
+    expect(seniorityFromTitle("Junior Developer")).toBe("Junior");
+    expect(seniorityFromTitle("Engineering Intern")).toBe("Intern");
+    expect(seniorityFromTitle("Sr. Platform Engineer")).toBe("Senior");
+  });
+
+  it("prefers the more specific level when a title names two", () => {
+    expect(seniorityFromTitle("Senior Staff Engineer")).toBe("Staff");
+  });
+
+  it("returns null rather than guessing a level the title never claimed", () => {
+    expect(seniorityFromTitle("Backend Engineer")).toBeNull();
+    expect(seniorityFromTitle("")).toBeNull();
+    expect(seniorityFromTitle(null)).toBeNull();
   });
 });

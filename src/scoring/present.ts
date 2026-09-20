@@ -384,3 +384,35 @@ function lowerFirst(line: string): string {
   if (/^[A-Z]{2,}/.test(line)) return line;
   return line.charAt(0).toLowerCase() + line.slice(1);
 }
+
+// ------------------------------------------------------------- job facts
+
+/**
+ * Seniority levels, most specific first so "Senior Staff Engineer" reads as
+ * Staff rather than Senior.
+ */
+const SENIORITY: Array<[RegExp, string]> = [
+  [/\bprincipal\b/i, "Principal"],
+  [/\bdistinguished\b/i, "Distinguished"],
+  [/\bstaff\b/i, "Staff"],
+  [/\b(lead|leader)\b/i, "Lead"],
+  [/\b(head of|director of engineering)\b/i, "Head of"],
+  [/\b(sr\.?|senior)\b/i, "Senior"],
+  [/\b(mid[\s-]level|intermediate)\b/i, "Mid-level"],
+  [/\b(jr\.?|junior)\b/i, "Junior"],
+  [/\b(graduate|new grad|entry[\s-]level)\b/i, "Entry-level"],
+  [/\bintern(ship)?\b/i, "Intern"],
+];
+
+/**
+ * The seniority a title states. Reading the title is not the same as guessing:
+ * a title that says nothing returns null and the chip is left off, rather than
+ * a "Mid-level" appearing that the posting never claimed.
+ */
+export function seniorityFromTitle(title: string | null | undefined): string | null {
+  if (!title) return null;
+  for (const [pattern, label] of SENIORITY) {
+    if (pattern.test(title)) return label;
+  }
+  return null;
+}

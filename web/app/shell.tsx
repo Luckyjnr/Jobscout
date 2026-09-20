@@ -142,7 +142,12 @@ export function Shell({ counts, children }: { counts: NavCounts; children: React
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const head = TITLES[pathname] ?? { title: "jobscout", sub: "" };
+  // a job page is not in TITLES because its path carries a fingerprint; the
+  // back button and the job's own header say where you are, so the topbar
+  // only has to name the section
+  const head =
+    TITLES[pathname] ??
+    (pathname.startsWith("/jobs/") ? { title: "Job", sub: "The full posting" } : { title: "Jobscout", sub: "" });
   const progress = counts.scoutTotal > 0 ? Math.round((counts.scoutDone / counts.scoutTotal) * 100) : 0;
   const detail = pathname.startsWith("/jobs/");
 

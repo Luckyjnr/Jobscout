@@ -1508,3 +1508,266 @@ kbd {
   .card-bottom { flex-wrap: wrap; row-gap: 10px; }
   .card-bottom .salary { flex: 1 1 100%; }
 }
+
+/* ============================================================ job header */
+
+.job-head {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.job-avatar {
+  width: 56px;
+  height: 56px;
+  flex: 0 0 56px;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+  color: #fff;
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.job-head-body { min-width: 0; flex: 1; }
+
+.job-badges {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+/* purple, because this badge is about the analysis and nothing else is */
+.badge-ai {
+  padding: 3px 9px;
+  border: 1px solid color-mix(in srgb, var(--ai) 55%, transparent);
+  border-radius: 100px;
+  background: var(--ai-wash);
+  color: var(--ai-lift);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+
+.badge-new {
+  padding: 3px 9px;
+  border-radius: 100px;
+  background: var(--success-wash);
+  color: var(--success);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.job-title {
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+
+.job-company {
+  margin: 4px 0 0;
+  color: var(--brand-ink);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.job-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.job-head-acts {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  flex: 0 0 auto;
+}
+
+/* ======================================================= job description */
+
+.jd { color: var(--ink-2); font-size: 13.5px; line-height: 1.65; }
+
+.jd p { margin: 0 0 12px; }
+
+/* a heading the posting actually wrote, styled rather than invented */
+.jd-h {
+  margin: 22px 0 10px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--border);
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.jd-h:first-child { margin-top: 0; }
+
+/* the five sections carry a colour so the shape of a posting is scannable */
+.jd-h::before {
+  content: "";
+  display: inline-block;
+  width: 3px;
+  height: 13px;
+  margin-right: 9px;
+  border-radius: 2px;
+  vertical-align: -2px;
+  background: var(--slate);
+}
+
+.jd-h[data-section="about"]::before { background: var(--brand-lift); }
+.jd-h[data-section="responsibilities"]::before { background: var(--ai-lift); }
+.jd-h[data-section="requirements"]::before { background: var(--accent); }
+.jd-h[data-section="nice-to-have"]::before { background: #22D3EE; }
+.jd-h[data-section="benefits"]::before { background: var(--success); }
+
+.jd-list { margin: 0 0 12px; padding-left: 0; list-style: none; }
+
+.jd-list li {
+  position: relative;
+  padding-left: 18px;
+  margin-bottom: 6px;
+}
+
+.jd-list li::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 8px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--border-loud);
+}
+
+/* ========================================================= AI analysis */
+
+.ai-panel {
+  border-color: color-mix(in srgb, var(--ai) 28%, var(--border));
+}
+
+.ai-panel > header .dot[data-state="running"] {
+  background: var(--ai-lift);
+  animation: aipulse 2.4s ease-out infinite, livepulse 1.8s ease-in-out infinite;
+}
+
+.ai-score {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 4px 0 14px;
+}
+
+.ring { flex: 0 0 112px; }
+.ring-track { fill: none; stroke: var(--border-strong); stroke-width: 9; }
+
+.ring-value {
+  fill: none;
+  stroke: var(--ai-lift);
+  stroke-width: 9;
+  stroke-linecap: round;
+  transition: stroke-dasharray var(--slow) var(--ease);
+}
+
+.ring-pct {
+  fill: var(--ink);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 30px;
+  font-weight: 600;
+}
+
+.ring-unit { fill: var(--faint); font-size: 12px; }
+
+.ai-band { display: block; font-size: 15px; font-weight: 650; }
+.ai-band[data-band="strong"] { color: var(--success); }
+.ai-band[data-band="good"] { color: var(--brand-ink); }
+.ai-band[data-band="fair"] { color: var(--accent); }
+.ai-band[data-band="weak"] { color: var(--slate); }
+
+.ai-skills {
+  display: block;
+  margin-top: 5px;
+  color: var(--slate);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.ai-label {
+  margin: 16px 0 8px;
+  color: var(--ai-lift);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.ai-list { margin: 0; padding: 0; list-style: none; }
+
+.ai-list li {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 7px;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.ai-list .tick {
+  flex: 0 0 15px;
+  height: 15px;
+  margin-top: 1px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--success-wash);
+  color: var(--success);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.ai-list.gaps .tick { background: var(--warn-wash); color: var(--accent); }
+
+.ai-summary {
+  margin: 0;
+  padding: 11px 12px;
+  border: 1px solid color-mix(in srgb, var(--ai) 30%, transparent);
+  border-radius: var(--radius-sm);
+  background: var(--ai-wash);
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.src-more {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.src-more a {
+  padding: 3px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 100px;
+  color: var(--slate);
+  font-size: 11px;
+}
+
+.src-more a:hover { border-color: var(--brand); color: var(--brand-ink); }
+
+@media (max-width: 900px) {
+  .job-head { flex-wrap: wrap; }
+  .job-head-acts { width: 100%; justify-content: stretch; }
+  .job-head-acts .btn { flex: 1; justify-content: center; }
+  .job-title { font-size: 22px; }
+}

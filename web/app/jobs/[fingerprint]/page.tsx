@@ -1,14 +1,20 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { seniorityFromTitle } from "../../match";
 import { jobDetail } from "../../db";
+import { describe } from "../../description";
 import { STATUS_LABELS, type Status } from "../../pipeline";
 import { DetailActions } from "./actions-client";
+import { Analysis } from "./analysis";
+import { HeaderActions } from "./header-actions";
 
 export const dynamic = "force-dynamic";
 
+const DAY = 86_400_000;
+
 function when(iso: string | null): string {
   if (!iso) return "not stated";
-  const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000);
+  const days = Math.floor((Date.now() - new Date(iso).getTime()) / DAY);
   if (days <= 0) return "today";
   if (days === 1) return "yesterday";
   if (days < 30) return `${days} days ago`;
@@ -16,10 +22,15 @@ function when(iso: string | null): string {
   return `${Math.floor(days / 365)} years ago`;
 }
 
+/** A stable colour per company, so the same avatar is the same colour everywhere. */
 function hue(company: string): string {
   let hash = 0;
   for (let i = 0; i < company.length; i += 1) hash = (hash * 31 + company.charCodeAt(i)) % 360;
   return `hsl(${hash} 52% 45%)`;
+}
+
+function isNew(iso: string | null): boolean {
+  return iso !== null && Date.now() - new Date(iso).getTime() < 2 * DAY;
 }
 
 export default async function JobDetailPage({
@@ -31,104 +42,97 @@ export default async function JobDetailPage({
   const job = await jobDetail(fingerprint);
   if (!job) notFound();
 
+  const presentable = {
+    score: job.score,
+    signals: job.all_signals,
+    remote: job.remote,
+    fit: job.fit,
+    reasons: job.reasons,
+    concerns: job.concerns,
+    title: job.title,
+  };
+
+  const blocks = describe(job.description);
+  const seniority = job.seniority ?? seniorityFromTitle(job.title);
+
+  // every chip here is a fact the posting carries; the ones a board does not
+  // publish are left out rather than defaulted
+  const chips = [
+    job.locations[0] ?? null,
+    job.salary_text,
+    job.employment_type,
+    seniority,
+    job.posted_at ? `Posted ${when(job.posted_at)}` : null,
+  ].filter((chip): chip is string => chip !== null && chip !== "");
+
   const positives = job.all_signals.filter((s) => s.weight > 0);
   const negatives = job.all_signals.filter((s) => s.weight < 0);
 
   return (
     <div className="page">
+      <section className="panel job-head">
+        <span className="job-avatar" style={{ background: hue(job.company) }} aria-hidden="true">
+          {job.company.trim().charAt(0).toUpperCase()}
+        </span>
+
+        <div className="job-head-body">
+          <div className="job-badges">
+            <span className="badge-ai">AI MATCH</span>
+            {isNew(job.posted_at) ? <span className="badge-new">New</span> : null}
+            {job.remote ? <span className="tag remote">Remote</span> : null}
+          </div>
+
+          <h1 className="job-title">{job.title}</h1>
+          <p className="job-company">{job.company}</p>
+
+          <div className="job-chips">
+            {chips.map((chip) => (
+              <span className="tag" key={chip}>
+                {chip}
+              </span>
+            ))}
+          </div>
+        </div>
+
+        <HeaderActions
+          fingerprint={job.fingerprint}
+          url={job.url}
+          decision={job.decision}
+          status={job.status}
+        />
+      </section>
+
       <div className="detail">
         <div className="grid" style={{ gap: 12 }}>
-          <section className="panel">
-            <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
-              <span className="logo" style={{ background: hue(job.company) }} aria-hidden="true">
-                {job.company.trim().charAt(0).toUpperCase()}
-              </span>
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <h2 style={{ fontSize: 20, fontWeight: 700 }}>{job.title}</h2>
-                <p style={{ margin: "2px 0 0", color: "var(--slate)", fontSize: 14 }}>{job.company}</p>
-              </div>
-              <span className="score-pill mono" style={{ fontSize: 17, padding: "9px 15px" }}>
-                {job.score}
-                {job.fit === null ? null : <span className="fit">fit {job.fit}</span>}
-              </span>
-            </div>
-
-            <div className="tags" style={{ marginTop: 14 }}>
-              {job.locations.map((location) => (
-                <span className="tag" key={location}>
-                  {location}
-                </span>
-              ))}
-              {job.remote ? <span className="tag remote">Remote</span> : null}
-              <span className="tag">{when(job.posted_at)}</span>
-              {job.sources.map((source) => (
-                <span className="tag mono" key={source}>
-                  {source}
-                </span>
-              ))}
-            </div>
-
-            <div className="card-bottom">
-              {job.salary_text ? (
-                <span className="salary">{job.salary_text}</span>
-              ) : (
-                <span className="salary none">Salary not stated</span>
-              )}
-              <div className="acts">
-                <a className="btn ghost" href={job.url} target="_blank" rel="noreferrer">
-                  Open posting ↗
-                </a>
-                <DetailActions
-                  fingerprint={job.fingerprint}
-                  decision={job.decision}
-                  status={job.status}
-                  note={job.note}
-                />
-              </div>
-            </div>
-          </section>
-
-          {job.reasons?.length || job.concerns?.length ? (
-            <section className="panel">
-              <header>
-                <h3>What the model made of it</h3>
-                <span className="sub">fit {job.fit}</span>
-              </header>
-              <div className="grid cols-2" style={{ gap: 16 }}>
-                <div>
-                  <b style={{ fontSize: 12, color: "var(--success)" }}>Reasons</b>
-                  <ul style={{ margin: "6px 0 0", paddingLeft: 18, color: "var(--ink-2)" }}>
-                    {(job.reasons ?? []).map((reason) => (
-                      <li key={reason}>{reason}</li>
-                    ))}
-                  </ul>
-                </div>
-                <div>
-                  <b style={{ fontSize: 12, color: "var(--warn)" }}>Concerns</b>
-                  <ul style={{ margin: "6px 0 0", paddingLeft: 18, color: "var(--ink-2)" }}>
-                    {(job.concerns ?? []).map((concern) => (
-                      <li key={concern}>{concern}</li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
-            </section>
-          ) : null}
-
           <section className="panel">
             <header>
               <h3>Description</h3>
               <span className="sub">{job.description.length.toLocaleString()} characters</span>
             </header>
-            {job.description.trim() ? (
-              <div className="prose">{job.description}</div>
-            ) : (
+
+            {blocks.length === 0 ? (
               <p style={{ color: "var(--slate)", margin: 0 }}>This source carries no description.</p>
+            ) : (
+              <div className="jd">
+                {blocks.map((block, index) =>
+                  block.kind === "heading" ? (
+                    <h4 className="jd-h" data-section={block.section} key={index}>
+                      {block.text}
+                    </h4>
+                  ) : block.kind === "list" ? (
+                    <ul className="jd-list" key={index}>
+                      {block.items.map((item, i) => (
+                        <li key={i}>{item}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p key={index}>{block.text}</p>
+                  ),
+                )}
+              </div>
             )}
           </section>
-        </div>
 
-        <div className="side">
           <section className="panel">
             <header>
               <h3>Why this score</h3>
@@ -153,37 +157,77 @@ export default async function JobDetailPage({
               )}
             </div>
           </section>
+        </div>
+
+        <div className="side">
+          <Analysis job={presentable} />
 
           <section className="panel">
             <header>
-              <h3>Where it is listed</h3>
-              <span className="sub">{job.postings} postings</span>
+              <h3>Source</h3>
+              <span className="sub">{job.postings} posting{job.postings === 1 ? "" : "s"}</span>
             </header>
-            {job.postings_detail.slice(0, 12).map((posting, index) => (
-              <div className="kv" key={`${posting.url}-${index}`}>
-                <b>{posting.location ?? "not stated"}</b>
-                <span>
-                  <a href={posting.url} target="_blank" rel="noreferrer" style={{ color: "var(--brand)" }}>
-                    {posting.source}
+
+            <div className="kv">
+              <b>Board</b>
+              <span className="mono">{job.sources.join(", ")}</span>
+            </div>
+            <div className="kv">
+              <b>Discovered</b>
+              <span>{when(job.discovered_at)}</span>
+            </div>
+            <div className="kv">
+              <b>Posted</b>
+              <span>{when(job.posted_at)}</span>
+            </div>
+
+            <a
+              className="btn ghost"
+              style={{ width: "100%", marginTop: 12, justifyContent: "center" }}
+              href={job.url}
+              target="_blank"
+              rel="noreferrer"
+            >
+              View Original Job ↗
+            </a>
+
+            {job.postings_detail.length > 1 ? (
+              <div className="src-more">
+                {job.postings_detail.slice(0, 8).map((posting, index) => (
+                  <a
+                    key={`${posting.url}-${index}`}
+                    href={posting.url}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {posting.location ?? posting.source}
                   </a>
-                </span>
+                ))}
               </div>
-            ))}
+            ) : null}
           </section>
 
-          {job.status ? (
-            <section className="panel">
-              <header>
-                <h3>Pipeline</h3>
-              </header>
-              <span className="pill brand">{STATUS_LABELS[job.status as Status]}</span>
+          <section className="panel">
+            <header>
+              <h3>Pipeline</h3>
+              {job.status ? <span className="sub">{STATUS_LABELS[job.status as Status]}</span> : null}
+            </header>
+            <div className="acts" style={{ flexWrap: "wrap" }}>
+              <DetailActions
+                fingerprint={job.fingerprint}
+                decision={job.decision}
+                status={job.status}
+                note={job.note}
+              />
+            </div>
+            {job.status ? (
               <p style={{ marginTop: 10, marginBottom: 0 }}>
-                <Link href="/applications" style={{ color: "var(--brand)", fontSize: 12 }}>
+                <Link href="/applications" style={{ color: "var(--brand-ink)", fontSize: 12 }}>
                   Open the board →
                 </Link>
               </p>
-            </section>
-          ) : null}
+            ) : null}
+          </section>
         </div>
       </div>
     </div>

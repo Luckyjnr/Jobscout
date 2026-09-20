@@ -211,6 +211,15 @@ export type JobDetail = Row & {
   all_signals: Signal[];
   decision: string | null;
   status: Status | null;
+  /** when jobscout first saw it, as distinct from when the board posted it */
+  discovered_at: string | null;
+  /**
+   * Only Lever and Jobicy publish these. Greenhouse — 1,300 of the 2,500
+   * postings in the corpus — publishes neither, so both are frequently null
+   * and the header simply leaves the chip out rather than guessing.
+   */
+  employment_type: string | null;
+  seniority: string | null;
   postings_detail: Array<{ location: string | null; url: string; source: string; posted_at: string | null }>;
 };
 
@@ -226,6 +235,14 @@ export async function jobDetail(fingerprint: string): Promise<JobDetail | null> 
             (array_agg(j.concerns) filter (where j.concerns is not null))[1] as concerns,
             (array_agg(d.decision) filter (where d.decision is not null))[1] as decision,
             (array_agg(d.status) filter (where d.status is not null))[1] as status,
+            min(j.created_at) as discovered_at,
+            -- Lever calls it commitment, Jobicy calls it jobType and stores it
+            -- as a one-element array; nobody else publishes it at all
+            (array_agg(coalesce(j.raw#>>'{jobType,0}', j.raw#>>'{categories,commitment}')
+                       order by (coalesce(j.raw#>>'{jobType,0}', j.raw#>>'{categories,commitment}') is null), j.id))[1]
+              as employment_type,
+            (array_agg(j.raw->>'jobLevel'
+                       order by (j.raw->>'jobLevel' is null), j.id))[1] as seniority,
             json_agg(json_build_object(
               'location', j.location, 'url', j.url,
               'source', j.source, 'posted_at', j.posted_at
