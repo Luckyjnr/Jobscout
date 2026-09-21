@@ -1,0 +1,61 @@
+name: check-migrations
+
+# `create table if not exists` is skipped whole on a database that already has
+# the table, so a column added inside one passes on a fresh database and fails
+# on the hosted one — which is how the scheduled crawl lost
+# sources.closes_missing. This upgrades a database built from every past
+# version of the schema to the current one, and fails the push if any of them
+# does not come out identical to a fresh build.
+on:
+  push:
+    paths:
+      - src/schema.sql
+      # the files that decide the result: the checker itself, and the migrate
+      # it runs (scripts/migrate.ts calls migrate() in src/db.ts)
+      - scripts/check-migrations.ts
+      - scripts/migrate.ts
+      - src/db.ts
+      - .github/workflows/check-migrations.yml
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # a throwaway server of its own, so the check can create and drop a
+    # database per schema version without touching the hosted one
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # every past version of src/schema.sql is built from git history; a
+          # shallow clone would hold one, and the script refuses to run on it
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # exits non-zero when any version fails to migrate or comes out different
+      # from a fresh build, which fails the push
+      - name: Upgrade every past schema to the current one
+        run: npm run check-migrations

@@ -173,6 +173,16 @@ function diff(label: string, expected: string[], actual: string[]): string[] {
 }
 
 async function main(): Promise<void> {
+  // A shallow clone has one commit, so the history below would hold a single
+  // version and the check would pass having tested nothing old. CI must fetch
+  // full history; refuse rather than quietly check less.
+  if (git("rev-parse", "--is-shallow-repository").trim() === "true") {
+    throw new Error(
+      "shallow clone: every past version of src/schema.sql is needed. " +
+        "In GitHub Actions, set fetch-depth: 0 on actions/checkout.",
+    );
+  }
+
   const versions = git("log", "--reverse", "--format=%h %s", "--", "src/schema.sql")
     .trim()
     .split("\n")
