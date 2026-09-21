@@ -1,3 +1,12 @@
+-- The rule for this file: a table's `create table if not exists` is skipped
+-- whole on any database where the table already exists, so a column added to
+-- one later never reaches that database. Every column added after a table
+-- first shipped goes in its create AND in an `alter table ... add column if
+-- not exists` after it, with a default if it is not null. Forgetting the alter
+-- passes on a fresh database and fails in production — it is how the hosted
+-- crawl lost sources.closes_missing. scripts/check-migrations.ts upgrades every
+-- historical version of this file and fails if any column is missing.
+
 create table if not exists jobs (
   id            bigserial primary key,
   source        text not null,
@@ -122,6 +131,10 @@ create table if not exists sources (
   created_at           timestamptz not null default now(),
   unique (name)
 );
+
+-- closes_missing arrived after sources did (9cb97c4 vs 0f14c9a), so a
+-- database created in between has the table without it
+alter table sources add column if not exists closes_missing boolean not null default false;
 
 -- ATS boards get the same courtesy floor
 alter table companies add column if not exists min_interval_minutes integer not null default 15;
