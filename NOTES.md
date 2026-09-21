@@ -58,3 +58,10 @@
   list; scripts/score.ts built Job with postedAt: null. Same failure mode.
 - State rename lives in schema.sql as idempotent updates. Deliberate: no
   migration framework, and a forgotten one-off script is worse.
+- create table if not exists skips the WHOLE statement if the table
+  exists. New columns inside it never reach a live DB. Every column
+  added later needs its own alter table add column if not exists.
+- Migrate succeeded on the broken DB. The error only surfaced in the
+  crawl. Silent schema drift, not a loud failure.
+- Testing from the first commit would NOT have caught it. The bug
+  lived between two specific commits. Test every schema version.
